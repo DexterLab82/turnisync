@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const state = {
-  image: null, people: [], selected: new Set(), shifts: [],
+  image: null, people: [], selected: new Set(), shifts: [], debugReport: null,
   preferred: localStorage.getItem("ts_preferred") || "",
   settings: JSON.parse(localStorage.getItem("ts_settings") || "null") || {
     codes: {
@@ -53,14 +53,15 @@ async function analyze() {
           setProgress(m.progress, `Lettura tabella: ${Math.round(m.progress * 100)}%`);
       }
     });
-    const result = await worker.recognize(state.image);
+    const prepared = await prepareOCRImage(state.image);
+    const result = await worker.recognize(prepared.canvas);
     await worker.terminate();
     setProgress(1, "Ricostruzione righe e colonne…");
-    const bitmap = await createImageBitmap(state.image);
-    const parsed = parseShiftTable(result.data, bitmap.width, bitmap.height);
-    bitmap.close();
+    const parsed = parseShiftTable(result.data, prepared.width, prepared.height);
     state.people = parsed.people;
     state.shifts = parsed.shifts;
+    state.debugReport = buildDebugReport(result.data, parsed, prepared.width, prepared.height);
+    renderDebug();
     state.selected = new Set(state.people.filter(p => normalize(p) === normalize(state.preferred)));
     renderPeople(); renderShifts();
     $("homeMessage").textContent =
@@ -73,6 +74,75 @@ async function analyze() {
     $("analyzeBtn").disabled = false;
   }
 }
+
+
+async function prepareOCRImage(file) {
+  const image = new Image(), url = URL.createObjectURL(file);
+  try {
+    await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject;image.src=url;});
+    const scale=Math.min(3,Math.max(2,1800/image.naturalWidth));
+    const canvas=document.createElement("canvas");
+    canvas.width=Math.round(image.naturalWidth*scale);
+    canvas.height=Math.round(image.naturalHeight*scale);
+    const ctx=canvas.getContext("2d",{willReadFrequently:true});
+    ctx.drawImage(image,0,0,canvas.width,canvas.height);
+    const pixels=ctx.getImageData(0,0,canvas.width,canvas.height),d=pixels.data;
+    for(let i=0;i<d.length;i+=4){
+      const gray=.299*d[i]+.587*d[i+1]+.114*d[i+2];
+      const contrast=Math.max(0,Math.min(255,(gray-128)*1.32+128));
+      d[i]=d[i+1]=d[i+2]=contrast;
+    }
+    ctx.putImageData(pixels,0,0);
+    return {canvas,width:canvas.width,height:canvas.height};
+  } finally {URL.revokeObjectURL(url);}
+}
+function buildDebugReport(data,parsed,width,height){
+  const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
+    x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
+  const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
+  return {appVersion:"0.3-debug",generatedAt:new Date().toISOString(),
+    image:{width,height,originalName:state.image?.name||"immagine"},
+    ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
+    table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
+      shifts:parsed.shifts.map(s=>({person:s.person,date:s.date,code:s.code,start:s.start,end:s.end,confidence:s.confidence,review:s.review})),
+      warnings:parsed.warnings,parser:parsed.debug||{}}};
+}
+function renderDebug(){
+  if(!state.debugReport)return;
+  $("debugPanel").classList.remove("hidden");
+  const d=state.debugReport;
+  const wordDump=d.ocr.words.map(w=>`${w.text} [${w.confidence}%] x:${w.x0}-${w.x1} y:${w.y0}-${w.y1}`).join("\\n");
+  $("debugText").textContent=`TURNISYNC DEBUG ${d.appVersion}
+IMMAGINE: ${d.image.width}x${d.image.height} · ${d.image.originalName}
+OCR: ${d.ocr.wordCount} parole · ${d.ocr.lineCount} righe
+
+TESTO OCR GREZZO
+${d.ocr.text}
+
+RISULTATO PARSER
+Periodo: ${d.table.period}
+Persone: ${d.table.people.join(", ")||"(nessuna)"}
+Turni: ${d.table.shiftCount}
+Avvisi: ${d.table.warnings.join(" | ")||"(nessuno)"}
+
+RIGHE OCR
+${d.ocr.lines.map(l=>`${l.line}. ${l.text} [${l.confidence}%]`).join("\\n")}
+
+PAROLE E COORDINATE
+${wordDump}`;
+}
+$("copyDebug")?.addEventListener("click",async()=>{
+  if(!state.debugReport)return;
+  try{await navigator.clipboard.writeText(JSON.stringify(state.debugReport,null,2));$("copyDebug").textContent="Copiato ✓";}
+  catch{$("debugText").textContent=JSON.stringify(state.debugReport,null,2);}
+});
+$("downloadDebug")?.addEventListener("click",()=>{
+  if(!state.debugReport)return;
+  const blob=new Blob([JSON.stringify(state.debugReport,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob),a=document.createElement("a");
+  a.href=url;a.download="turnisync-debug.json";document.body.append(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),4000);
+});
 
 function normalize(s) {
   return String(s || "").toLocaleLowerCase("it").normalize("NFD")

@@ -49,6 +49,15 @@
         <p id="progressText">Preparazione OCR…</p>
       </div>
       <div id="homeMessage" class="message">Le immagini vengono elaborate sul dispositivo: lo screenshot non viene caricato.</div>
+      <details id="debugPanel" class="debug-panel hidden">
+        <summary>Diagnostica OCR · DEBUG</summary>
+        <p class="debug-hint">Dati tecnici del riconoscimento: testo OCR, coordinate, righe, celle, persone, date ed errori. Puoi copiarli o scaricare un JSON da allegare in chat.</p>
+        <div class="debug-actions">
+          <button id="copyDebug" class="secondary">Copia diagnostica</button>
+          <button id="downloadDebug" class="secondary">Scarica JSON</button>
+        </div>
+        <pre id="debugText" class="debug-output">In attesa di analisi…</pre>
+      </details>
       <div class="privacy-note"><span>🔒</span><span>Privacy: l'OCR avviene nel browser. La libreria OCR viene scaricata al primo utilizzo, ma l'immagine resta sul tuo iPhone.</span></div>
     </section>
 
