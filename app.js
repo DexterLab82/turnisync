@@ -211,7 +211,7 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
     text:w.text.trim(),cx:(w.bbox.x0+w.bbox.x1)/2,cy:(w.bbox.y0+w.bbox.y1)/2,
     width:w.bbox.x1-w.bbox.x0,height:w.bbox.y1-w.bbox.y0,confidence:(w.confidence||0)/100
   }));
-  const rows=groupRows(words.filter(w=>w.confidence>.08),imageH),warnings=[];
+  const rows=groupRows(words,imageH),warnings=[];
   const yearWord=words.find(w=>w.cy<imageH*.28&&/^20\d{2}$/.test(w.text)&&Number(w.text)<=2100);
   const year=yearWord?Number(yearWord.text):null;
   const dayRows=rows.map(row=>({row,candidates:row.words.filter(w=>w.cx>imageW*.10&&/^\d{1,2}$/.test(w.text)&&Number(w.text)>=1&&Number(w.text)<=31)})).filter(x=>x.candidates.length>=5);
@@ -302,7 +302,7 @@ $("savePreferred").onclick=()=>{
 function renderShifts() {
   const list=$("shiftList"), chosen=state.shifts.filter(s=>state.selected.has(s.person));
   $("countTotal").textContent=chosen.length; $("countReview").textContent=chosen.filter(s=>s.review).length;
-  $("countPeople").textContent=state.selected.size; $("exportBtn").disabled=!chosen.length; list.innerHTML="";
+  $("countPeople").textContent=state.selected.size; $("exportBtn").disabled=!chosen.length||chosen.some(s=>s.review); list.innerHTML="";
   if (!chosen.length) { list.innerHTML='<div class="panel empty">Nessun turno per le persone selezionate.</div>'; return; }
   chosen.sort((a,b)=>a.start.localeCompare(b.start)).forEach(s=>{
     const card=document.createElement("article"); card.className="shift-card";
