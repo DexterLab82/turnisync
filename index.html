@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101827">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TurniSync">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./style.css">
+  <title>TurniSync</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark">TS</div>
+    <div><div class="brand">TurniSync</div><div class="subbrand">I tuoi turni, nel calendario</div></div>
+    <span class="local-pill">● OCR locale</span>
+  </header>
+
+  <nav class="tabs" aria-label="Sezioni">
+    <button class="tab active" data-tab="home">Home</button>
+    <button class="tab" data-tab="people">Persone</button>
+    <button class="tab" data-tab="preview">Anteprima</button>
+    <button class="tab" data-tab="settings">Impostazioni</button>
+  </nav>
+
+  <main>
+    <section id="home" class="screen active">
+      <div class="hero">
+        <div class="eyebrow">IMPORTAZIONE INTELLIGENTE</div>
+        <h1>Dal turno allo<br>smartphone.</h1>
+        <p>Carica uno screenshot, controlla i turni riconosciuti e prepara il calendario.</p>
+      </div>
+      <label class="upload-card" for="imageInput">
+        <span class="upload-icon">＋</span>
+        <strong>Carica screenshot</strong>
+        <span>Seleziona un'immagine dalla galleria</span>
+      </label>
+      <input id="imageInput" type="file" accept="image/*" hidden>
+      <div id="imagePreviewWrap" class="image-preview-wrap hidden">
+        <img id="imagePreview" alt="Anteprima screenshot">
+        <button id="clearImage" class="text-button">Rimuovi immagine</button>
+      </div>
+      <button id="analyzeBtn" class="primary" disabled>Analizza turni</button>
+      <div id="ocrProgress" class="progress-wrap hidden">
+        <div class="progress-track"><div id="progressBar"></div></div>
+        <p id="progressText">Preparazione OCR…</p>
+      </div>
+      <div id="homeMessage" class="message">Le immagini vengono elaborate sul dispositivo: lo screenshot non viene caricato.</div>
+      <div class="privacy-note"><span>🔒</span><span>Privacy: l'OCR avviene nel browser. La libreria OCR viene scaricata al primo utilizzo, ma l'immagine resta sul tuo iPhone.</span></div>
+    </section>
+
+    <section id="people" class="screen">
+      <div class="section-head"><div class="eyebrow">DESTINATARI</div><h2>Chi vuoi sincronizzare?</h2><p>Seleziona solo le persone di cui vuoi inserire i turni.</p></div>
+      <div id="peopleList" class="panel empty">Prima carica e analizza uno screenshot.</div>
+      <button id="savePreferred" class="secondary" disabled>Salva selezione come preferita</button>
+    </section>
+
+    <section id="preview" class="screen">
+      <div class="section-head"><div class="eyebrow">CONTROLLO</div><h2>Anteprima turni</h2><p>Controlla ogni evento prima di esportarlo nel Calendario.</p></div>
+      <div class="summary-grid">
+        <div class="summary"><b id="countTotal">0</b><span>Turni</span></div>
+        <div class="summary"><b id="countReview">0</b><span>Da verificare</span></div>
+        <div class="summary"><b id="countPeople">0</b><span>Persone</span></div>
+      </div>
+      <div id="shiftList" class="shift-list"><div class="panel empty">Nessun turno ancora. Analizza uno screenshot dalla Home.</div></div>
+      <button id="exportBtn" class="primary" disabled>Conferma ed esporta calendario (.ics)</button>
+      <div class="message">Su iPhone, apri il file .ics generato e aggiungi gli eventi al Calendario. La PWA non può scrivere direttamente nel database Apple Calendar come un'app nativa.</div>
+      <div id="exportMessage" class="message success hidden"></div>
+    </section>
+
+    <section id="settings" class="screen">
+      <div class="section-head"><div class="eyebrow">PERSONALIZZAZIONE</div><h2>Impostazioni</h2><p>Configura gli orari e il comportamento di TurniSync.</p></div>
+      <div class="panel">
+        <label class="field-label" for="preferredName">Nome preferito</label>
+        <input id="preferredName" class="field" placeholder="Es. Mario Rossi">
+        <label class="check-row"><input id="duplicateCheck" type="checkbox" checked> Evita duplicati nell'esportazione (stesso file)</label>
+        <label class="field-label">Fuso orario</label><div class="static-field">Europe/Rome</div>
+      </div>
+      <div class="panel">
+        <h3>Codici turno</h3>
+        <div class="shift-config">
+          <label>Codice 1 · Mattina <span><input id="s1start" type="time" value="06:00"> – <input id="s1end" type="time" value="14:00"></span></label>
+          <label>Codice 2 · Pomeriggio <span><input id="s2start" type="time" value="14:00"> – <input id="s2end" type="time" value="22:00"></span></label>
+          <label>Codice 3 · Notte <span><input id="s3start" type="time" value="22:00"> – <input id="s3end" type="time" value="06:00"></span></label>
+        </div>
+        <button id="saveSettings" class="secondary">Salva impostazioni</button>
+      </div>
+      <button id="resetBtn" class="danger">Azzera dati di questa sessione</button>
+      <p class="fineprint">Le preferenze vengono salvate localmente nel browser. Nessun account e nessun server applicativo.</p>
+    </section>
+  </main>
+
+  <footer>TurniSync · versione test 0.1 · elaborazione locale</footer>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
