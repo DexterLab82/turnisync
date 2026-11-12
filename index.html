@@ -16,7 +16,7 @@
   <header class="topbar">
     <div class="brand-mark">TS</div>
     <div><div class="brand">TurniSync</div><div class="subbrand">I tuoi turni, nel calendario</div></div>
-    <span class="local-pill">● OCR locale</span>
+    <div class="top-actions"><span class="local-pill">● OCR locale</span><button id="refreshAppBtn" class="refresh-btn" type="button" aria-label="Aggiorna TurniSync">↻ Aggiorna</button></div>
   </header>
 
   <nav class="tabs" aria-label="Sezioni">
@@ -44,6 +44,7 @@
         <button id="clearImage" class="text-button">Rimuovi immagine</button>
       </div>
       <button id="analyzeBtn" class="primary" disabled>Analizza turni</button>
+      <button id="installHelpBtn" class="secondary install-help" type="button">＋ Installa TurniSync su iPhone</button>
       <div id="ocrProgress" class="progress-wrap hidden">
         <div class="progress-track"><div id="progressBar"></div></div>
         <p id="progressText">Preparazione OCR…</p>
@@ -102,7 +103,7 @@
     </section>
   </main>
 
-  <footer>TurniSync · versione test 0.1 · elaborazione locale</footer>
+  <footer>TurniSync · versione 0.4.0 · elaborazione locale</footer>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="./app.js"></script>
 </body>
