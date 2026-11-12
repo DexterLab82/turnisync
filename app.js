@@ -55,9 +55,9 @@ async function analyze() {
     });
     const prepared = await prepareOCRImage(state.image);
     const result = await worker.recognize(prepared.canvas);
+    setProgress(.72, "Separazione delle celle e verifica dei nominativi…");
+    const parsed = await parseShiftTable(result.data, prepared.width, prepared.height, prepared.canvas, worker, setProgress);
     await worker.terminate();
-    setProgress(1, "Ricostruzione righe e colonne…");
-    const parsed = parseShiftTable(result.data, prepared.width, prepared.height);
     state.people = parsed.people;
     state.shifts = parsed.shifts;
     state.debugReport = buildDebugReport(result.data, parsed, prepared.width, prepared.height);
@@ -100,7 +100,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.3-debug",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.4.0",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -155,13 +155,35 @@ const MONTHS = {
   DICEMBRE:12, DIC:12
 };
 function monthFromWords(words) {
-  for (const w of words) {
-    const key = normalize(w.text).toLocaleUpperCase("it");
-    for (const [name, num] of Object.entries(MONTHS)) {
-      if (key === normalize(name).toLocaleUpperCase("it") || key.startsWith(normalize(name).toLocaleUpperCase("it"))) return num;
+  // Cerca il mese esclusivamente nella colonna descrittiva: MAR della settimana è martedì, non marzo.
+  for (const w of words.filter(w => w.cx < 180 && w.cy < 150)) {
+    const key=normalize(w.text).toLocaleUpperCase("it").replace(/[^A-Z]/g,"");
+    for (const [name,num] of Object.entries(MONTHS)) {
+      const candidate=normalize(name).toLocaleUpperCase("it");
+      if(key===candidate||(candidate.length>3&&key.startsWith(candidate.slice(0,3))))return num;
     }
   }
   return null;
+}
+function weekdayNumber(text) {
+  const s=normalize(text).toLocaleUpperCase("it");
+  if(s.startsWith("LUN"))return 1;if(s.startsWith("MAR"))return 2;
+  if(s.startsWith("MER"))return 3;if(s.startsWith("GIO"))return 4;
+  if(s.startsWith("VEN"))return 5;if(s.startsWith("SAB"))return 6;
+  if(s.startsWith("DOM"))return 0;return null;
+}
+function inferMonthFromWeekdays(rows,headerRow,fit,year,imageH) {
+  const observations=[];
+  for(const row of rows.filter(r=>r.cy>headerRow.cy&&r.cy<headerRow.cy+imageH*.17)){
+    for(const w of row.words){const wd=weekdayNumber(w.text);if(wd===null)continue;
+      const day=Math.round((w.cx-fit.intercept)/fit.slope);if(day>=1&&day<=31)observations.push({day,wd});}
+  }
+  let best={month:null,score:0,matches:0};
+  for(let m=0;m<12;m++){const valid=observations.filter(o=>o.day<=new Date(year,m+1,0).getDate());
+    const matches=valid.filter(o=>new Date(year,m,o.day,12).getDay()===o.wd).length;
+    const score=valid.length?matches/valid.length:0;
+    if(matches>best.matches||(matches===best.matches&&score>best.score))best={month:m+1,score,matches};}
+  return {...best,observations};
 }
 function groupRows(words, imageHeight) {
   const tolerance = Math.max(6, imageHeight * 0.028);
@@ -184,83 +206,69 @@ function linearFit(points) {
   const slope = (n*sxy - sx*sy)/den;
   return { slope, intercept: (sy - slope*sx)/n };
 }
-function parseShiftTable(data, imageW, imageH) {
-  const words = (data.words || []).filter(w => w.text && w.confidence > 18).map(w => ({
-    text: w.text.trim(), cx: (w.bbox.x0+w.bbox.x1)/2, cy: (w.bbox.y0+w.bbox.y1)/2,
-    width: w.bbox.x1-w.bbox.x0, height: w.bbox.y1-w.bbox.y0, confidence: w.confidence/100
+async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) {
+  const words=(data.words||[]).filter(w=>w.text&&w.bbox).map(w=>({
+    text:w.text.trim(),cx:(w.bbox.x0+w.bbox.x1)/2,cy:(w.bbox.y0+w.bbox.y1)/2,
+    width:w.bbox.x1-w.bbox.x0,height:w.bbox.y1-w.bbox.y0,confidence:(w.confidence||0)/100
   }));
-  const rows = groupRows(words, imageH);
-  const warnings = [];
-
-  // In questa tabella il mese e l'anno sono nell'angolo alto sinistro;
-  // la prima riga contiene i numeri dei giorni (1..31), la seconda i weekday.
-  const month = monthFromWords(words.filter(w => w.cy < imageH * .22));
-  const yearWord = words.find(w => w.cy < imageH * .28 && /^\d{4}$/.test(w.text) && Number(w.text) >= 2020 && Number(w.text) <= 2100);
-  const year = yearWord ? Number(yearWord.text) : null;
-
-  const dayRows = rows.map(row => {
-    const candidates = row.words.filter(w => w.cx > imageW*.10 && /^\d{1,2}$/.test(w.text) &&
-      Number(w.text) >= 1 && Number(w.text) <= 31);
-    return { row, candidates };
-  }).filter(x => x.candidates.length >= 5);
-  const header = dayRows.sort((a,b) => b.candidates.length-a.candidates.length)[0];
-
-  if (!month || !year) {
-    warnings.push("Mese o anno non riconosciuti nell'intestazione: controllare lo screenshot.");
-  }
-  if (!header) {
-    warnings.push("Non riconosco la riga superiore con i numeri dei giorni.");
-    return { people: [], shifts: [], warnings, period: "non riconosciuto" };
-  }
-  const observations = header.candidates.map(w => ({ day:Number(w.text), x:w.cx }))
-    .filter(p => p.day >= 1 && p.day <= 31);
-  const fit = linearFit(observations);
-  if (!fit || fit.slope <= 0) {
-    warnings.push("Non riesco a ricostruire la spaziatura delle colonne.");
-    return { people: [], shifts: [], warnings, period: "non riconosciuto" };
-  }
-  const columnWidth = fit.slope;
-  const firstColumnX = fit.intercept + columnWidth;
-  const leftBoundary = firstColumnX - columnWidth*.50;
-
-  // Estrae le righe delle persone sotto l'intestazione dei giorni.
-  const personRows = rows.filter(r => r.cy > header.row.cy + imageH*.055);
-  const people = [], shifts = [];
-  const ignoreLeft = new Set(["NOVEMBRE","OTTOBRE","GENNAIO","FEBBRAIO","MARZO","APRILE","MAGGIO","GIUGNO","LUGLIO","AGOSTO","SETTEMBRE","DICEMBRE"]);
-  for (const row of personRows) {
-    const left = row.words.filter(w => w.cx < leftBoundary && /[A-Za-zÀ-ÿ]/.test(w.text));
-    if (!left.length) continue;
-    const name = left.map(w => w.text).join(" ").replace(/\s+/g," ").trim();
-    if (name.length < 3 || ignoreLeft.has(name.toUpperCase()) || /^\d+$/.test(name)) continue;
-    if (!people.some(p => normalize(p) === normalize(name))) people.push(name);
-
-    for (const cell of row.words.filter(w => w.cx >= leftBoundary)) {
-      const day = Math.round((cell.cx - fit.intercept) / columnWidth);
-      if (day < 1 || day > 31) continue;
-      const expectedX = fit.intercept + day*columnWidth;
-      if (Math.abs(cell.cx-expectedX) > columnWidth*.46) continue;
-      const token = cell.text.toUpperCase().replace(/[|]/g,"1").trim();
-      if (token === "R" || token === "F" || token === "RF" || token === "FR" || token === "-") continue;
-      if (!/^[1-3]$/.test(token)) {
-        if (/[0-9]/.test(token) || /^[A-Z]$/.test(token)) warnings.push(`${name}, giorno ${day}: "${cell.text}" da verificare`);
-        continue;
-      }
-      if (!month || !year) continue;
-      const date = new Date(year, month-1, day, 12);
-      if (date.getMonth() !== month-1) { warnings.push(`Data non valida: ${day}/${month}/${year}`); continue; }
-      const code = Number(token), cfg = state.settings.codes[code];
-      const start = dateAt(date, cfg.start), end = dateAt(date, cfg.end);
-      if (end <= start) end.setDate(end.getDate()+1);
-      shifts.push({
-        id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
-        person: name, date: isoDate(date), code, start: isoLocal(start), end: isoLocal(end),
-        confidence: cell.confidence, review: cell.confidence < .70
-      });
+  const rows=groupRows(words.filter(w=>w.confidence>.08),imageH),warnings=[];
+  const yearWord=words.find(w=>w.cy<imageH*.28&&/^20\d{2}$/.test(w.text)&&Number(w.text)<=2100);
+  const year=yearWord?Number(yearWord.text):null;
+  const dayRows=rows.map(row=>({row,candidates:row.words.filter(w=>w.cx>imageW*.10&&/^\d{1,2}$/.test(w.text)&&Number(w.text)>=1&&Number(w.text)<=31)})).filter(x=>x.candidates.length>=5);
+  const header=dayRows.sort((a,b)=>b.candidates.length-a.candidates.length)[0];
+  if(!header)return {people:[],shifts:[],warnings:["Non riconosco la riga dei giorni."],period:"non riconosciuto",debug:{rows:rows.length}};
+  const fit=linearFit(header.candidates.map(w=>({day:Number(w.text),x:w.cx})));
+  if(!fit||fit.slope<=0)return {people:[],shifts:[],warnings:["Spaziatura delle colonne non riconosciuta."],period:"non riconosciuto",debug:{headerTokens:header.candidates.map(w=>w.text)}};
+  const columnWidth=fit.slope,leftBoundary=fit.intercept+columnWidth*.5;
+  const personRows=rows.filter(r=>r.cy>header.row.cy+imageH*.055);
+  const centers=personRows.map(r=>r.cy).sort((a,b)=>a-b);
+  const gaps=centers.slice(1).map((v,i)=>v-centers[i]).filter(v=>v>imageH*.035&&v<imageH*.2).sort((a,b)=>a-b);
+  const rowGap=gaps.length?gaps[Math.floor(gaps.length/2)]:imageH*.091;
+  const cropHeight=Math.max(24,Math.round(rowGap*.78));
+  const crop=(x,y,w,h)=>{
+    const c=document.createElement("canvas");c.width=Math.max(1,Math.round(w));c.height=Math.max(1,Math.round(h));
+    const sx=Math.max(0,Math.round(x)),sy=Math.max(0,Math.round(y));
+    const sw=Math.max(1,Math.min(sourceCanvas.width-sx,Math.round(w))),sh=Math.max(1,Math.min(sourceCanvas.height-sy,Math.round(h)));
+    c.getContext("2d").drawImage(sourceCanvas,sx,sy,sw,sh,0,0,c.width,c.height);return c;
+  };
+  let month=monthFromWords(words.filter(w=>w.cx<leftBoundary&&w.cy<imageH*.24));
+  const weekdayInference=year?inferMonthFromWeekdays(rows,header.row,fit,year,imageH):{month:null,score:0,observations:[]};
+  if(!month&&weekdayInference.month&&weekdayInference.score>=.75)month=weekdayInference.month;
+  if(!year)warnings.push("Anno non riconosciuto nell'intestazione.");
+  if(!month)warnings.push("Mese non riconosciuto con certezza: gli eventi non saranno esportabili.");
+  const daysInMonth=month&&year?new Date(year,month,0).getDate():31;
+  const people=[],shifts=[],cellDiagnostics=[];
+  const candidates=personRows.filter(r=>r.words.some(w=>w.cx<leftBoundary&&/[A-Za-zÀ-ÿ]/.test(w.text)));
+  let rowIndex=0;
+  for(const row of candidates){
+    rowIndex++;
+    await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÀÈÉÌÒÙàèéìòù' -"});
+    const nr=await worker.recognize(crop(0,row.cy-cropHeight/2,Math.max(80,leftBoundary-8),cropHeight));
+    let name=(nr.data.text||"").replace(/[|_\[\]{}]/g," ").replace(/\s+/g," ").trim();
+    if(name.length<3||!/[A-Za-zÀ-ÿ]/.test(name))name=row.words.filter(w=>w.cx<leftBoundary&&/[A-Za-zÀ-ÿ]/.test(w.text)).map(w=>w.text).join(" ").trim();
+    if(name.length<3)continue;
+    if(people.some(p=>normalize(p)===normalize(name)))name+=` (${rowIndex})`;
+    people.push(name);
+    await worker.setParameters({tessedit_pageseg_mode:"10",tessedit_char_whitelist:"123RF"});
+    for(let day=1;day<=daysInMonth;day++){
+      const x=fit.intercept+day*columnWidth;
+      const cr=await worker.recognize(crop(x-columnWidth*.39,row.cy-cropHeight*.43,columnWidth*.78,cropHeight*.86));
+      const raw=(cr.data.text||"").toUpperCase().replace(/[^123RF]/g,"");
+      const confidence=(cr.data.confidence||0)/100,match=raw.match(/[123]/),leave=/[RF]/.test(raw);
+      if(match&&month&&year){
+        const date=new Date(year,month-1,day,12),code=Number(match[0]),cfg=state.settings.codes[code];
+        const start=dateAt(date,cfg.start),end=dateAt(date,cfg.end);if(end<=start)end.setDate(end.getDate()+1);
+        shifts.push({id:crypto.randomUUID?crypto.randomUUID():Date.now()+"-"+Math.random(),person:name,date:isoDate(date),code,start:isoLocal(start),end:isoLocal(end),confidence,review:confidence<.62||raw.length>1});
+      }else if(!leave&&raw.length)warnings.push(`${name}, giorno ${day}: cella ambigua (${raw})`);
+      cellDiagnostics.push({person:name,day,raw,confidence,kind:match?"shift":leave?"leave":raw?"ambiguous":"empty"});
     }
+    if(progress)progress(.72+.25*(rowIndex/candidates.length),`Lettura celle: persona ${rowIndex}/${candidates.length}`);
   }
-  if (!month || !year) warnings.push("Nessun turno creato per evitare di inventare le date.");
-  const period = month && year ? `${Object.keys(MONTHS).find(k=>MONTHS[k]===month && k.length>3) || month}/${year}` : "mese/anno mancanti";
-  return { people: people.sort((a,b)=>a.localeCompare(b,"it")), shifts, warnings, period };
+  const monthName=month?Object.keys(MONTHS).find(k=>MONTHS[k]===month&&k.length>3):null;
+  if(!month||!year)warnings.push("Turni non esportabili finché mese e anno non sono confermati.");
+  return {people:people.sort((a,b)=>a.localeCompare(b,"it")),shifts,warnings,period:month&&year?`${monthName||month}/${year}`:"non riconosciuto",
+    debug:{headerTokens:header.candidates.map(w=>({text:w.text,x:Math.round(w.cx)})),columnWidth:Math.round(columnWidth),
+      leftBoundary:Math.round(leftBoundary),rowGap:Math.round(rowGap),weekdayInference,cellCount:cellDiagnostics.length,cells:cellDiagnostics}};
 }
 function dateAt(date,time) {
   const [h,m] = time.split(":").map(Number);
@@ -323,6 +331,7 @@ function escapeICS(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;")
 function icsDate(s){return s.replace(/[-:]/g,"")+"00";}
 $("exportBtn").onclick=()=>{
   const chosen=state.shifts.filter(s=>state.selected.has(s.person)); if(!chosen.length)return;
+  if(chosen.some(s=>s.review)){alert("Ci sono turni da verificare. Correggi o conferma ogni turno prima dell'esportazione.");return;}
   const seen=new Set(),events=[];
   for(const s of chosen){
     const title=({1:"Turno Mattina",2:"Turno Pomeriggio",3:"Turno Notte"})[s.code];
@@ -357,6 +366,16 @@ $("resetBtn").onclick=()=>{
   $("imagePreviewWrap").classList.add("hidden");$("imageInput").value="";$("analyzeBtn").disabled=true;
   renderPeople();renderShifts();
 };
+async function refreshApplication(){
+  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno…";}
+  try{
+    if("serviceWorker" in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()));}
+    if("caches" in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith("turnisync-")).map(k=>caches.delete(k)));}
+  }catch(err){console.warn("Aggiornamento cache:",err);}
+  const url=new URL(location.href);url.searchParams.set("refresh",Date.now().toString());location.replace(url.toString());
+}
+$("refreshAppBtn")?.addEventListener("click",refreshApplication);
+$("installHelpBtn")?.addEventListener("click",()=>alert("Per installare TurniSync su iPhone: apri questa pagina in Safari, tocca Condividi e scegli “Aggiungi alla schermata Home”."));
 loadSettings();
 if("serviceWorker" in navigator && location.protocol.startsWith("http"))
   window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
