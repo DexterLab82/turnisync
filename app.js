@@ -100,7 +100,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.4.0",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.4.1",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -231,7 +231,14 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
     const sw=Math.max(1,Math.min(sourceCanvas.width-sx,Math.round(w))),sh=Math.max(1,Math.min(sourceCanvas.height-sy,Math.round(h)));
     c.getContext("2d").drawImage(sourceCanvas,sx,sy,sw,sh,0,0,c.width,c.height);return c;
   };
-  let month=monthFromWords(words.filter(w=>w.cx<leftBoundary&&w.cy<imageH*.24));
+  // Il mese è nella cella superiore sinistra, non nella riga dei giorni:
+  // OCR dedicato su quel rettangolo evita che "MAR" (martedì) venga letto come marzo.
+  await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
+  const monthHeaderResult=await worker.recognize(crop(0,0,imageW*.125,imageH*.105));
+  const monthHeaderRaw=(monthHeaderResult.data.text||"").trim();
+  const monthHeaderKey=normalize(monthHeaderRaw).toLocaleUpperCase("it");
+  const fullMonthNames={GENNAIO:1,FEBBRAIO:2,MARZO:3,APRILE:4,MAGGIO:5,GIUGNO:6,LUGLIO:7,AGOSTO:8,SETTEMBRE:9,OTTOBRE:10,NOVEMBRE:11,DICEMBRE:12};
+  let month=fullMonthNames[monthHeaderKey]||monthFromWords(words.filter(w=>w.cx<leftBoundary&&w.cy<imageH*.24));
   const weekdayInference=year?inferMonthFromWeekdays(rows,header.row,fit,year,imageH):{month:null,score:0,observations:[]};
   if(!month&&weekdayInference.month&&weekdayInference.score>=.75)month=weekdayInference.month;
   if(!year)warnings.push("Anno non riconosciuto nell'intestazione.");
@@ -267,7 +274,7 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
   const monthName=month?Object.keys(MONTHS).find(k=>MONTHS[k]===month&&k.length>3):null;
   if(!month||!year)warnings.push("Turni non esportabili finché mese e anno non sono confermati.");
   return {people:people.sort((a,b)=>a.localeCompare(b,"it")),shifts,warnings,period:month&&year?`${monthName||month}/${year}`:"non riconosciuto",
-    debug:{headerTokens:header.candidates.map(w=>({text:w.text,x:Math.round(w.cx)})),columnWidth:Math.round(columnWidth),
+    debug:{monthHeaderRaw,monthHeaderConfidence:monthHeaderResult.data.confidence,monthSource:fullMonthNames[monthHeaderKey]?"header-crop":month?"weekday-or-ocr-fallback":"unresolved",headerTokens:header.candidates.map(w=>({text:w.text,x:Math.round(w.cx)})),columnWidth:Math.round(columnWidth),
       leftBoundary:Math.round(leftBoundary),rowGap:Math.round(rowGap),weekdayInference,cellCount:cellDiagnostics.length,cells:cellDiagnostics}};
 }
 function dateAt(date,time) {
