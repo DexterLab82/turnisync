@@ -289,6 +289,7 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
   if(!namesComplete)warnings.push("Non tutti i nominativi sono stati riconosciuti: esportazione bloccata.");
   if(!month||!year||daysInMonth!==grid.days)warnings.push("Turni non esportabili finché intestazione e numero di giorni non sono coerenti.");
   const weekdayChecks=[];
+  let weekdayConflict=false;
   if(month&&year){
     await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
     const sampleDays=[1,2,3,7,14,21,28].filter(day=>day<=grid.days);
@@ -300,11 +301,13 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
       weekdayChecks.push({day,raw,observed,expected,match:observed===null?null:observed===expected});
     }
     const checked=weekdayChecks.filter(v=>v.match!==null);
-    if(checked.length>=3&&checked.filter(v=>!v.match).length>=2)
-      warnings.push("Le iniziali dei giorni della settimana non corrispondono al mese/anno rilevati: verifica l'intestazione.");
+    if(checked.length>=3&&checked.filter(v=>!v.match).length>=2){
+      weekdayConflict=true;
+      warnings.push("Le iniziali dei giorni della settimana non corrispondono al mese/anno rilevati: esportazione bloccata.");
+    }
   }
   const shifts=[];
-  if(calendarValid){
+  if(calendarValid&&!weekdayConflict){
     await worker.setParameters({tessedit_pageseg_mode:"10"});
     for(let p=0;p<people.length;p++){
       const person=people[p],row=person.row,top=y[row+2],bottom=y[row+3];
@@ -313,7 +316,9 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
         const cw=right-left,ch=cellBottom-cellTop;
         const cell= crop(left+cw*.16,cellTop+ch*.13,right-cw*.16,cellBottom-ch*.13,2);
         const result=await worker.recognize(cell);
-        const raw=(result.data.text||"").toUpperCase().replace(/[^123RF]/g,"");
+        const rawText=(result.data.text||"").toUpperCase().trim();
+        const raw=rawText.replace(/[^123RF]/g,"");
+        const suspicious=rawText.replace(/[\\s|.,]/g,"").length!==raw.length;
         const confidence=(result.data.confidence||0)/100;
         const codes=raw.match(/[123]/g)||[],hasLeave=/[RF]/.test(raw);
         if(codes.length&&!hasLeave){
@@ -321,7 +326,7 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
           const start=dateAt(date,cfg.start),end=dateAt(date,cfg.end);
           if(end<=start)end.setDate(end.getDate()+1);
           shifts.push({id:crypto.randomUUID?crypto.randomUUID():Date.now()+"-"+Math.random(),person:person.name,date:isoDate(date),
-            code,start:isoLocal(start),end:isoLocal(end),confidence,review:confidence<.70||raw.length!==1});
+            code,start:isoLocal(start),end:isoLocal(end),confidence,review:confidence<.70||raw.length!==1||suspicious});
         }else if(codes.length&&hasLeave){
           warnings.push(person.name+", giorno "+day+": cella ambigua ("+raw+").");
         }else if(raw&&!hasLeave){
