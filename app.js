@@ -318,7 +318,7 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
         const result=await worker.recognize(cell);
         const rawText=(result.data.text||"").toUpperCase().trim();
         const raw=rawText.replace(/[^123RF]/g,"");
-        const suspicious=rawText.replace(/[\\s|.,]/g,"").length!==raw.length;
+        const suspicious=rawText.replace(/[\s|.,]/g,"").length!==raw.length;
         const confidence=(result.data.confidence||0)/100;
         const codes=raw.match(/[123]/g)||[],hasLeave=/[RF]/.test(raw);
         if(codes.length&&!hasLeave){
