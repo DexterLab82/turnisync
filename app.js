@@ -104,7 +104,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.5.4",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.5.5",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -437,15 +437,14 @@ function renderDeviceInfo(){const el=$("deviceInfo");if(el)el.textContent="Dispo
 function escapeICS(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");}
 function icsDate(s){return s.replace(/[-:]/g,"")+"00";}
 async function deliverFile(blob,filename){
- const file=new File([blob],filename,{type:"text/calendar;charset=utf-8"});
- if(navigator.canShare&&navigator.canShare({files:[file]})&&navigator.share){
-  try{await navigator.share({files:[file],title:filename});return "Condivisione aperta: scegli Calendario oppure Salva su File → Download.";}
-  catch(e){if(e.name==="AbortError")return "Condivisione annullata.";}
- }
  const url=URL.createObjectURL(blob),a=document.createElement("a");
- a.href=url;a.download=filename;a.style.display="none";document.body.append(a);a.click();a.remove();
- setTimeout(()=>URL.revokeObjectURL(url),120000);
- return "Download avviato: "+filename+".";
+ a.href=url;a.download=filename;a.style.display="none";
+ document.body.append(a);a.click();a.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),600000);
+ if(deviceInfo.target==="apple"){
+  return "Download avviato: "+filename+". Su iPhone apri File → Sfoglia → Download, tocca TurniSync-turni.ics, poi Aggiungi tutto e scegli il calendario in cui inserirli.";
+ }
+ return "Download avviato: "+filename+". Apri il file scaricato per importare gli eventi nel calendario.";
 }
 $("exportBtn").onclick=async()=>{
  const chosen=state.shifts.filter(s=>state.selected.has(s.person));if(!chosen.length)return;
@@ -489,15 +488,15 @@ $("resetBtn").onclick=()=>{
   renderPeople();renderShifts();
 };
 async function refreshApplication(){
-  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.4…";}
+  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.5…";}
   try{
     if("serviceWorker" in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()));}
     if("caches" in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith("turnisync-")).map(k=>caches.delete(k)));}
   }catch(err){console.warn("Aggiornamento cache:",err);}
-  const url=new URL(location.href);url.searchParams.set("refresh","0.5.4-"+Date.now().toString());location.replace(url.toString());
+  const url=new URL(location.href);url.searchParams.set("refresh","0.5.5-"+Date.now().toString());location.replace(url.toString());
 }
 $("refreshAppBtn")?.addEventListener("click",refreshApplication);
 $("installHelpBtn")?.addEventListener("click",()=>alert("Per installare TurniSync su iPhone: apri questa pagina in Safari, tocca Condividi e scegli “Aggiungi alla schermata Home”."));
 loadSettings();
 if("serviceWorker" in navigator && location.protocol.startsWith("http"))
-  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.4",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
+  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.5",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
