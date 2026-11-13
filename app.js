@@ -104,7 +104,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.5.3",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.5.4",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -434,26 +434,18 @@ function renderShifts() {
 function shiftFingerprint(s){return [normalize(s.person),s.start,s.end].join("|");}
 function stableUid(value){let h=2166136261;for(let i=0;i<value.length;i++){h^=value.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16);}
 function renderDeviceInfo(){const el=$("deviceInfo");if(el)el.textContent="Dispositivo rilevato: "+deviceInfo.label+". La modalità automatica seleziona "+({apple:"Apple Calendar",google:"Google Calendar",outlook:"Outlook",ics:"file .ics"}[deviceInfo.target])+".";}
-function escapeICS(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\n/g,"\\n");}
+function escapeICS(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");}
 function icsDate(s){return s.replace(/[-:]/g,"")+"00";}
 async function deliverFile(blob,filename){
- const url=URL.createObjectURL(blob);
- const a=document.createElement("a");
- a.href=url;a.download=filename;a.rel="noopener";
- a.style.display="none";document.body.append(a);
- try{
-  a.click();
-  $("exportMessage")?.classList.remove("hidden");
-  setTimeout(()=>URL.revokeObjectURL(url),120000);
-  return "Download avviato: "+filename+". Su iPhone il file viene salvato nella cartella Download configurata in Safari.";
- }catch(err){
-  URL.revokeObjectURL(url);
-  if(navigator.canShare&&navigator.canShare({files:[new File([blob],filename,{type:blob.type})]})){
-   await navigator.share({files:[new File([blob],filename,{type:blob.type})],title:filename});
-   return "Seleziona Salva su File e scegli la cartella Download.";
-  }
-  throw err;
- }finally{a.remove();}
+ const file=new File([blob],filename,{type:"text/calendar;charset=utf-8"});
+ if(navigator.canShare&&navigator.canShare({files:[file]})&&navigator.share){
+  try{await navigator.share({files:[file],title:filename});return "Condivisione aperta: scegli Calendario oppure Salva su File → Download.";}
+  catch(e){if(e.name==="AbortError")return "Condivisione annullata.";}
+ }
+ const url=URL.createObjectURL(blob),a=document.createElement("a");
+ a.href=url;a.download=filename;a.style.display="none";document.body.append(a);a.click();a.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),120000);
+ return "Download avviato: "+filename+".";
 }
 $("exportBtn").onclick=async()=>{
  const chosen=state.shifts.filter(s=>state.selected.has(s.person));if(!chosen.length)return;
@@ -463,17 +455,18 @@ $("exportBtn").onclick=async()=>{
   const title=({1:"Turno Mattina",2:"Turno Pomeriggio",3:"Turno Notte"})[s.code];
   const key=[s.start,s.end,title,s.person].join("|");
   if(state.settings.duplicates&&seen.has(key))continue;seen.add(key);
-  events.push(["BEGIN:VEVENT",`UID:${s.id}@turnisync.local`,
-   `DTSTAMP:${new Date().toISOString().replace(/[-:]/g,"").replace(/\\.\\d{3}/,"")}`,
-   `DTSTART;TZID=Europe/Rome:${icsDate(s.start)}`,`DTEND;TZID=Europe/Rome:${icsDate(s.end)}`,
-   `SUMMARY:${escapeICS(title+" · "+s.person)}`,`DESCRIPTION:${escapeICS("Persona: "+s.person+"\\nCodice turno: "+s.code)}`,"END:VEVENT"].join("\r\n"));
+  const stamp=new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z");
+  events.push(["BEGIN:VEVENT","UID:"+s.id+"@turnisync.local","DTSTAMP:"+stamp,
+   "DTSTART:"+icsDate(s.start),"DTEND:"+icsDate(s.end),
+   "SUMMARY:"+escapeICS(title+" · "+s.person),
+   "DESCRIPTION:"+escapeICS("Persona: "+s.person+"\nCodice turno: "+s.code),"END:VEVENT"].join("\r\n"));
  }
  if(!events.length){$("exportMessage").classList.remove("hidden");$("exportMessage").textContent="Nessun turno da esportare.";return;}
- const calendar=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//TurniSync//IT","CALSCALE:GREGORIAN","BEGIN:VTIMEZONE","TZID:Europe/Rome","END:VTIMEZONE",...events,"END:VCALENDAR"].join("\r\n");
+ const calendar=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//TurniSync//IT","CALSCALE:GREGORIAN","METHOD:PUBLISH",...events,"END:VCALENDAR",""].join("\r\n");
  const blob=new Blob([calendar],{type:"text/calendar;charset=utf-8"});
- $("exportMessage").classList.remove("hidden");$("exportMessage").textContent="Preparazione file calendario…";
+ $("exportMessage").classList.remove("hidden");$("exportMessage").textContent="Preparazione calendario…";
  try{$("exportMessage").textContent=await deliverFile(blob,"TurniSync-turni.ics")+" Eventi: "+events.length+".";}
- catch(e){$("exportMessage").textContent="Impossibile condividere il file: "+e.message;}
+ catch(e){$("exportMessage").textContent="Esportazione non riuscita: "+e.message;}
 };
 function loadSettings(){
   $("preferredName").value=state.preferred;$("duplicateCheck").checked=state.settings.duplicates;$("calendarPreference").value=state.settings.calendarPreference||"auto";renderDeviceInfo();
@@ -496,15 +489,15 @@ $("resetBtn").onclick=()=>{
   renderPeople();renderShifts();
 };
 async function refreshApplication(){
-  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.3…";}
+  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.4…";}
   try{
     if("serviceWorker" in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()));}
     if("caches" in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith("turnisync-")).map(k=>caches.delete(k)));}
   }catch(err){console.warn("Aggiornamento cache:",err);}
-  const url=new URL(location.href);url.searchParams.set("refresh","0.5.3-"+Date.now().toString());location.replace(url.toString());
+  const url=new URL(location.href);url.searchParams.set("refresh","0.5.4-"+Date.now().toString());location.replace(url.toString());
 }
 $("refreshAppBtn")?.addEventListener("click",refreshApplication);
 $("installHelpBtn")?.addEventListener("click",()=>alert("Per installare TurniSync su iPhone: apri questa pagina in Safari, tocca Condividi e scegli “Aggiungi alla schermata Home”."));
 loadSettings();
 if("serviceWorker" in navigator && location.protocol.startsWith("http"))
-  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.3",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
+  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.4",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
