@@ -489,12 +489,12 @@ $("resetBtn").onclick=()=>{
   renderPeople();renderShifts();
 };
 async function refreshApplication(){
-  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno…";}
+  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.2…";}
   try{
     if("serviceWorker" in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()));}
     if("caches" in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith("turnisync-")).map(k=>caches.delete(k)));}
   }catch(err){console.warn("Aggiornamento cache:",err);}
-  const url=new URL(location.href);url.searchParams.set("refresh",Date.now().toString());location.replace(url.toString());
+  const url=new URL(location.href);url.searchParams.set("refresh","0.5.2-"+Date.now().toString());location.replace(url.toString());
 }
 $("refreshAppBtn")?.addEventListener("click",refreshApplication);
 $("installHelpBtn")?.addEventListener("click",()=>alert("Per installare TurniSync su iPhone: apri questa pagina in Safari, tocca Condividi e scegli “Aggiungi alla schermata Home”."));
