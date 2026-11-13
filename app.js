@@ -500,4 +500,4 @@ $("refreshAppBtn")?.addEventListener("click",refreshApplication);
 $("installHelpBtn")?.addEventListener("click",()=>alert("Per installare TurniSync su iPhone: apri questa pagina in Safari, tocca Condividi e scegli “Aggiungi alla schermata Home”."));
 loadSettings();
 if("serviceWorker" in navigator && location.protocol.startsWith("http"))
-  window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.2",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
