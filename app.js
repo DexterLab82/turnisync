@@ -100,7 +100,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.4.2",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.4.3",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -308,7 +308,9 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
   }
   const shifts=[];
   if(calendarValid&&!weekdayConflict){
-    await worker.setParameters({tessedit_pageseg_mode:"10"});
+    // Ripristina esplicitamente l’alfabeto dei turni: i parametri OCR precedenti
+    // (nomi e giorni della settimana) restano attivi sul worker se non sovrascritti.
+    await worker.setParameters({tessedit_pageseg_mode:"10",tessedit_char_whitelist:"123RF"});
     for(let p=0;p<people.length;p++){
       const person=people[p],row=person.row,top=y[row+2],bottom=y[row+3];
       for(let day=1;day<=grid.days;day++){
