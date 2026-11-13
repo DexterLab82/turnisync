@@ -1,21 +1,38 @@
-const APP_VERSION = "0.5.10";
+const APP_VERSION = "0.5.11";
 const APP_BUILD = "2026-11-13";
 const $ = (id) => document.getElementById(id);
+const DEFAULT_SETTINGS = {
+  codes:{1:{name:"Mattina",start:"06:00",end:"14:00"},2:{name:"Pomeriggio",start:"14:00",end:"22:00"},3:{name:"Notte",start:"22:00",end:"06:00"}},
+  duplicates:true,calendarPreference:"auto",duplicateHistory:[]
+};
+function readLocal(key,fallback="") { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } }
+function writeLocal(key,value) { try { localStorage.setItem(key,value); return true; } catch { return false; } }
 const savedPreferredSelection = (() => {
   try {
-    const value = JSON.parse(localStorage.getItem("ts_preferred_selection") || "[]");
+    const value = JSON.parse(readLocal("ts_preferred_selection", "[]"));
     return Array.isArray(value) ? value : [];
   } catch { return []; }
 })();
-const legacyPreferred = localStorage.getItem("ts_preferred") || "";
+const legacyPreferred = readLocal("ts_preferred");
 function detectDevice(){const ua=navigator.userAgent||"";if(/iPhone|iPad|iPod/i.test(ua)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1))return {label:"Apple / iOS",target:"apple"};if(/Android/i.test(ua))return {label:"Android",target:"google"};if(/Windows/i.test(ua))return {label:"Windows",target:"outlook"};if(/Macintosh|Mac OS X/i.test(ua))return {label:"macOS",target:"apple"};return {label:"Altro dispositivo",target:"ics"};}
 const deviceInfo=detectDevice();
-const storedSettings=(()=>{try{return JSON.parse(localStorage.getItem("ts_settings")||"null")||{};}catch{return {};}})();
+const storedSettings=(()=>{try{const value=JSON.parse(readLocal("ts_settings","null"));return value&&typeof value==="object"&&!Array.isArray(value)?value:{};}catch{return {};}})();
+function normalizeSettings(saved) {
+  const calendarPreference=["auto","apple","google","outlook"].includes(saved.calendarPreference)?saved.calendarPreference:"auto";
+  const codes={};
+  for(let i=1;i<=3;i++){
+    const fallback=DEFAULT_SETTINGS.codes[i],candidate=saved.codes?.[i]||{};
+    const validTime=value=>typeof value==="string"&&/^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+    codes[i]={name:fallback.name,start:validTime(candidate.start)?candidate.start:fallback.start,end:validTime(candidate.end)?candidate.end:fallback.end};
+  }
+  return {...DEFAULT_SETTINGS,...saved,codes,duplicates:typeof saved.duplicates==="boolean"?saved.duplicates:true,
+    calendarPreference,duplicateHistory:Array.isArray(saved.duplicateHistory)?saved.duplicateHistory.filter(v=>typeof v==="string").slice(-2000):[]};
+}
 const state = {
   image: null, people: [], selected: new Set(), shifts: [], debugReport: null,
   preferred: legacyPreferred,
   preferredSelection: savedPreferredSelection.length ? savedPreferredSelection : (legacyPreferred ? [legacyPreferred] : []),
-  settings: {...{codes:{1:{name:"Mattina",start:"06:00",end:"14:00"},2:{name:"Pomeriggio",start:"14:00",end:"22:00"},3:{name:"Notte",start:"22:00",end:"06:00"}},duplicates:true,calendarPreference:"auto",duplicateHistory:[]},...storedSettings}
+  settings: normalizeSettings(storedSettings)
 };
 
 document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -51,9 +68,10 @@ async function analyze() {
     return;
   }
   $("analyzeBtn").disabled = true;
+  let worker=null;
   try {
     setProgress(.02, "Avvio riconoscimento locale…");
-    const worker = await Tesseract.createWorker("ita+eng", 1, {
+    worker = await Tesseract.createWorker("ita+eng", 1, {
       logger: m => {
         if (m.status === "recognizing text")
           setProgress(m.progress, `Lettura tabella: ${Math.round(m.progress * 100)}%`);
@@ -63,7 +81,6 @@ async function analyze() {
     const result = await worker.recognize(prepared.canvas);
     setProgress(.72, "Separazione delle celle e verifica dei nominativi…");
     const parsed = await parseShiftTable(result.data, prepared.width, prepared.height, prepared.canvas, worker, setProgress);
-    await worker.terminate();
     state.people = parsed.people;
     state.shifts = parsed.shifts;
     state.debugReport = buildDebugReport(result.data, parsed, prepared.width, prepared.height);
@@ -77,6 +94,8 @@ async function analyze() {
   } catch (err) {
     $("homeMessage").textContent = "Errore OCR: " + err.message;
   } finally {
+    if(worker)try{await worker.terminate();}catch(error){console.warn("Chiusura worker OCR:",error);}
+    $("ocrProgress").classList.add("hidden");
     $("analyzeBtn").disabled = false;
   }
 }
@@ -117,7 +136,7 @@ function renderDebug(){
   if(!state.debugReport)return;
   $("debugPanel").classList.remove("hidden");
   const d=state.debugReport;
-  const wordDump=d.ocr.words.map(w=>`${w.text} [${w.confidence}%] x:${w.x0}-${w.x1} y:${w.y0}-${w.y1}`).join("\\n");
+  const wordDump=d.ocr.words.map(w=>`${w.text} [${w.confidence}%] x:${w.x0}-${w.x1} y:${w.y0}-${w.y1}`).join("\n");
   $("debugText").textContent=`TURNISYNC DEBUG ${d.appVersion}
 IMMAGINE: ${d.image.width}x${d.image.height} · ${d.image.originalName}
 OCR: ${d.ocr.wordCount} parole · ${d.ocr.lineCount} righe
@@ -132,7 +151,7 @@ Turni: ${d.table.shiftCount}
 Avvisi: ${d.table.warnings.join(" | ")||"(nessuno)"}
 
 RIGHE OCR
-${d.ocr.lines.map(l=>`${l.line}. ${l.text} [${l.confidence}%]`).join("\\n")}
+${d.ocr.lines.map(l=>`${l.line}. ${l.text} [${l.confidence}%]`).join("\n")}
 
 PAROLE E COORDINATE
 ${wordDump}`;
@@ -461,11 +480,12 @@ async function deliverFile(blob,filename){
 $("exportBtn").onclick=async()=>{
  const chosen=state.shifts.filter(s=>state.selected.has(s.person));if(!chosen.length)return;
  if(chosen.some(s=>s.review)){alert("Ci sono turni da verificare prima dell'esportazione.");return;}
- const seen=new Set(),events=[];
+ const seen=new Set(),events=[],exportedKeys=[];
+ const alreadyExported=new Set(state.settings.duplicateHistory);
  for(const s of chosen){
   const title=({1:"Turno Mattina",2:"Turno Pomeriggio",3:"Turno Notte"})[s.code];
-  const key=[s.start,s.end,title,s.person].join("|");
-  if(state.settings.duplicates&&seen.has(key))continue;seen.add(key);
+  const key=shiftFingerprint(s);
+  if(state.settings.duplicates&&(seen.has(key)||alreadyExported.has(key)))continue;seen.add(key);exportedKeys.push(key);
   const stamp=new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z");
   events.push(["BEGIN:VEVENT","UID:"+stableUid(normalize(s.person)+"|"+s.date+"|"+s.code)+"@turnisync.local","DTSTAMP:"+stamp,
    "DTSTART:"+icsDate(s.start),"DTEND:"+icsDate(s.end),
@@ -476,22 +496,32 @@ $("exportBtn").onclick=async()=>{
  const calendar=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//TurniSync//IT","CALSCALE:GREGORIAN","METHOD:PUBLISH",...events,"END:VCALENDAR",""].join("\r\n");
  const blob=new Blob([calendar],{type:"text/calendar;charset=utf-8"});
  $("exportMessage").classList.remove("hidden");$("exportMessage").textContent="Preparazione calendario…";
- try{$("exportMessage").textContent=await deliverFile(blob,"TurniSync-turni.ics")+" Eventi: "+events.length+".";}
+ try{
+  let message=await deliverFile(blob,"TurniSync-turni.ics");
+  if(state.settings.duplicates){
+    state.settings.duplicateHistory=[...new Set([...state.settings.duplicateHistory,...exportedKeys])].slice(-2000);
+    if(!writeLocal("ts_settings",JSON.stringify(state.settings)))message+=" Nota: impossibile salvare lo storico duplicati su questo browser.";
+  }
+  $("exportMessage").textContent=message+" Eventi: "+events.length+".";
+ }
  catch(e){$("exportMessage").textContent="Esportazione non riuscita: "+e.message;}
 };
 function loadSettings(){
+  state.settings=normalizeSettings(state.settings);
   $("preferredName").value=state.preferred;$("duplicateCheck").checked=state.settings.duplicates;$("calendarPreference").value=state.settings.calendarPreference||"auto";renderDeviceInfo();
   for(let i=1;i<=3;i++){$("s"+i+"start").value=state.settings.codes[i].start;$("s"+i+"end").value=state.settings.codes[i].end;}
 }
 $("saveSettings").onclick=()=>{
   state.preferred=$("preferredName").value.trim();
   state.preferredSelection=state.preferred?[state.preferred]:[];
-  localStorage.setItem("ts_preferred",state.preferred);
-  localStorage.setItem("ts_preferred_selection",JSON.stringify(state.preferredSelection));
+  writeLocal("ts_preferred",state.preferred);
+  writeLocal("ts_preferred_selection",JSON.stringify(state.preferredSelection));
   state.settings.duplicates=$("duplicateCheck").checked;state.settings.calendarPreference=$("calendarPreference").value;
   for(let i=1;i<=3;i++){state.settings.codes[i].start=$("s"+i+"start").value;state.settings.codes[i].end=$("s"+i+"end").value;}
-  localStorage.setItem("ts_settings",JSON.stringify(state.settings));
-  $("homeMessage").textContent="Impostazioni salvate sul dispositivo.";
+  if(!writeLocal("ts_settings",JSON.stringify(state.settings))){
+    $("homeMessage").textContent="Impostazioni usate per questa sessione, ma il browser non ha consentito di salvarle.";return;
+  }
+  $("homeMessage").textContent="Impostazioni salvate solo in questo browser/dispositivo.";
 };
 $("resetBtn").onclick=()=>{
   if(!confirm("Cancellare persone e turni della sessione?"))return;
@@ -540,8 +570,8 @@ $("installHelpBtn")?.addEventListener("click",async()=>{
  const safari=/Safari/i.test(ua)&&!/CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/i.test(ua);
  if(ios){
   const msg=safari?"1. Tocca Condividi (il quadrato con la freccia in basso o in alto).\n2. Scorri e seleziona “Aggiungi alla schermata Home”.\n3. Conferma con “Aggiungi”.\n\nL'icona TurniSync comparirà sulla Home.":"Apri il menu del browser e scegli “Apri in Safari”. Poi in Safari: Condividi → Aggiungi alla schermata Home → Aggiungi.";
-  if($("installStatus"))$("installStatus").textContent=msg.replace(/\\n/g," ");
-  alert("Installazione TurniSync su iPhone\\n\\n"+msg);
+  if($("installStatus"))$("installStatus").textContent=msg.replace(/\n/g," ");
+  alert("Installazione TurniSync su iPhone\n\n"+msg);
  }else if(deferredInstallPrompt){
   deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;setupInstallButton();
  }else{
