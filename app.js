@@ -1,4 +1,4 @@
-const APP_VERSION = "0.5.13";
+const APP_VERSION = "0.5.14";
 const APP_BUILD = "2026-11-13";
 const $ = (id) => document.getElementById(id);
 const DEFAULT_SETTINGS = {
@@ -535,7 +535,20 @@ function renderShifts() {
     edit.append(code,start,end,person);
     const actions=document.createElement("div");actions.className="shift-actions";
     const remove=document.createElement("button");remove.textContent="Rimuovi";remove.onclick=()=>{state.shifts=state.shifts.filter(x=>x.id!==s.id);renderShifts();};
-    code.onchange=()=>{const cfg=state.settings.codes[Number(code.value)];const d=new Date(s.date+"T12:00:00");const [sh,sm]=cfg.start.split(":").map(Number),[eh,em]=cfg.end.split(":").map(Number);const st=new Date(d.getFullYear(),d.getMonth(),d.getDate(),sh,sm),en=new Date(d.getFullYear(),d.getMonth(),d.getDate(),eh,em);if(en<=st)en.setDate(en.getDate()+1);start.value=isoLocal(st);end.value=isoLocal(en);};
+    code.onchange=()=>{
+      const nextCode=Number(code.value),cfg=state.settings.codes[nextCode],d=new Date(s.date+"T12:00:00");
+      const [sh,sm]=cfg.start.split(":").map(Number),[eh,em]=cfg.end.split(":").map(Number);
+      const st=new Date(d.getFullYear(),d.getMonth(),d.getDate(),sh,sm),en=new Date(d.getFullYear(),d.getMonth(),d.getDate(),eh,em);
+      if(en<=st)en.setDate(en.getDate()+1);
+      start.value=isoLocal(st);end.value=isoLocal(en);
+      // Applica subito codice e orari al turno, così l'esportazione non conserva l'intervallo precedente.
+      s.code=nextCode;s.start=start.value;s.end=end.value;s.review=false;
+      strong.textContent=({1:"Turno Mattina",2:"Turno Pomeriggio",3:"Turno Notte"})[nextCode];
+      title.querySelector(".tag")?.remove();
+      const selectedShifts=state.shifts.filter(shift=>state.selected.has(shift.person));
+      $("countReview").textContent=selectedShifts.filter(shift=>shift.review).length;
+      $("exportBtn").disabled=!selectedShifts.length||selectedShifts.some(shift=>shift.review);
+    };
     const save=document.createElement("button");save.textContent="Salva modifica";save.onclick=()=>{
       const oldPerson=s.person,newPerson=person.value.trim()||oldPerson;
       const startDate=new Date(start.value),endDate=new Date(end.value);
@@ -550,10 +563,42 @@ function renderShifts() {
 }
 function shiftFingerprint(s){return [normalize(s.person),s.start,s.end].join("|");}
 function stableUid(value){let h=2166136261;for(let i=0;i<value.length;i++){h^=value.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16);}
-function renderDeviceInfo(){const el=$("deviceInfo");if(el)el.textContent="Dispositivo rilevato: "+deviceInfo.label+". La modalità automatica seleziona "+({apple:"Apple Calendar",google:"Google Calendar",outlook:"Outlook",ics:"file .ics"}[deviceInfo.target])+".";}
+function selectedCalendarTarget(preference=$("calendarPreference")?.value||state.settings.calendarPreference||"auto"){
+ const target=preference==="auto"?deviceInfo.target:preference;
+ return ["apple","google","outlook"].includes(target)?target:"ics";
+}
+function renderDeviceInfo(){
+ const savedTarget=selectedCalendarTarget(state.settings.calendarPreference),draftTarget=selectedCalendarTarget(),label={apple:"Apple Calendar",google:"Google Calendar",outlook:"Microsoft Outlook",ics:"calendario compatibile"}[savedTarget];
+ const el=$("deviceInfo");if(el)el.textContent="Dispositivo rilevato: "+deviceInfo.label+". Destinazione attiva: "+label+".";
+ const format=$("calendarFormatHint");
+ if(format)format.textContent=draftTarget!==savedTarget
+   ?"Hai selezionato "+({apple:"Apple Calendar · .ics",google:"Google Calendar · CSV",outlook:"Outlook · .ics",ics:"calendario compatibile · .ics"}[draftTarget])+". Salva le impostazioni per applicare il nuovo formato."
+   :savedTarget==="google"
+     ?"Formato attivo: CSV per Google Calendar. Google importa i CSV da calendar.google.com su computer; il file può essere creato anche dal telefono e trasferito."
+     :"Formato attivo: file iCalendar (.ics), compatibile con "+label+".";
+ const guide=$("exportGuide");
+ if(guide)guide.textContent=savedTarget==="google"
+   ?"Verrà creato un CSV per Google Calendar. Per importarlo: da computer apri calendar.google.com → Impostazioni → Importa ed esporta, scegli il file e il calendario di destinazione."
+   :savedTarget==="apple"
+     ?"Verrà creato un file .ics per Apple Calendar. Su iPhone apri il file scaricato da File e scegli di aggiungere gli eventi al Calendario."
+     :savedTarget==="outlook"
+       ?"Verrà creato un file .ics per Outlook. In Outlook scegli Aggiungi calendario → Carica da file e seleziona il calendario di destinazione."
+       :"Verrà creato un file .ics compatibile con i calendari che supportano iCalendar.";
+}
+function escapeCSV(value){return '"'+String(value??"").replace(/"/g,'""')+'"';}
+function csvDate(value){const [date]=value.split("T"),[year,month,day]=date.split("-");return month+"/"+day+"/"+year;}
+function csvTime(value){const [,time]=value.split("T"),[hour,minute]=time.split(":").map(Number);return (hour%12||12)+":"+String(minute).padStart(2,"0")+" "+(hour<12?"AM":"PM");}
+function googleCalendarCSV(events){
+ const rows=[["Subject","Start Date","Start Time","End Date","End Time","All Day Event","Description","Location","Private"]];
+ for(const event of events)rows.push([
+   event.title,csvDate(event.start),csvTime(event.start),csvDate(event.end),csvTime(event.end),"False",
+   "Persona: "+event.person+" | Codice turno: "+event.code,"","False"
+ ]);
+ return "\uFEFF"+rows.map(row=>row.map(escapeCSV).join(",")).join("\r\n")+"\r\n";
+}
 function escapeICS(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");}
 function icsDate(s){return s.replace(/[-:]/g,"")+"00";}
-async function deliverFile(blob,filename){
+async function deliverFile(blob,filename,target){
   // Flusso verificato su iPhone: download diretto del file .ics, poi apertura da File.
   // Evita navigator.share, che su iOS non propone sempre l'azione "Aggiungi al Calendario".
   const url=URL.createObjectURL(blob),a=document.createElement("a");
@@ -561,32 +606,40 @@ async function deliverFile(blob,filename){
   document.body.append(a);a.click();a.remove();
   // Mantieni il Blob URL disponibile più a lungo per Safari/iOS.
   setTimeout(()=>URL.revokeObjectURL(url),600000);
-  if(deviceInfo.target==="apple"){
+  if(target==="apple"){
    return "Download avviato: "+filename+". Su iPhone apri File → Sfoglia → Download, tocca il file e premi “Aggiungi tutto”, quindi scegli il calendario.";
   }
+  if(target==="google")return "Download avviato: "+filename+". Per importarlo in Google Calendar usa calendar.google.com da computer → Impostazioni → Importa ed esporta.";
+  if(target==="outlook")return "Download avviato: "+filename+". In Outlook scegli Aggiungi calendario → Carica da file e seleziona il calendario.";
   return "Download avviato: "+filename+". Apri il file scaricato per importare gli eventi nel calendario.";
 }
 $("exportBtn").onclick=async()=>{
  const chosen=state.shifts.filter(s=>state.selected.has(s.person));if(!chosen.length)return;
  if(chosen.some(s=>s.review)){alert("Ci sono turni da verificare prima dell'esportazione.");return;}
- const seen=new Set(),events=[],exportedKeys=[];
+ const target=selectedCalendarTarget(state.settings.calendarPreference),seen=new Set(),events=[],exportedKeys=[];
  const alreadyExported=new Set(state.settings.duplicateHistory);
  for(const s of chosen){
   const title=({1:"Turno Mattina",2:"Turno Pomeriggio",3:"Turno Notte"})[s.code];
   const key=shiftFingerprint(s);
   if(state.settings.duplicates&&(seen.has(key)||alreadyExported.has(key)))continue;seen.add(key);exportedKeys.push(key);
   const stamp=new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z");
-  events.push(["BEGIN:VEVENT","UID:"+stableUid(normalize(s.person)+"|"+s.date+"|"+s.code)+"@turnisync.local","DTSTAMP:"+stamp,
-   "DTSTART:"+icsDate(s.start),"DTEND:"+icsDate(s.end),
-   "SUMMARY:"+escapeICS(title+" · "+s.person),
-   "DESCRIPTION:"+escapeICS("Persona: "+s.person+"\nCodice turno: "+s.code),"END:VEVENT"].join("\r\n"));
+  events.push({uid:stableUid(normalize(s.person)+"|"+s.date+"|"+s.code)+"@turnisync.local",stamp,
+   start:s.start,end:s.end,title:title+" · "+s.person,person:s.person,code:s.code});
  }
  if(!events.length){$("exportMessage").classList.remove("hidden");$("exportMessage").textContent="Nessun turno da esportare.";return;}
- const calendar=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//TurniSync//IT","CALSCALE:GREGORIAN","METHOD:PUBLISH",...events,"END:VCALENDAR",""].join("\r\n");
- const blob=new Blob([calendar],{type:"text/calendar;charset=utf-8"});
+ const isGoogle=target==="google",filename=isGoogle?"TurniSync-GoogleCalendar.csv":target==="outlook"?"TurniSync-Outlook.ics":target==="apple"?"TurniSync-AppleCalendar.ics":"TurniSync-turni.ics";
+ const content=isGoogle?googleCalendarCSV(events):[
+  "BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//TurniSync//IT","CALSCALE:GREGORIAN","METHOD:PUBLISH",
+  ...events.map(event=>["BEGIN:VEVENT","UID:"+event.uid,"DTSTAMP:"+event.stamp,
+   "DTSTART:"+icsDate(event.start),"DTEND:"+icsDate(event.end),
+   "SUMMARY:"+escapeICS(event.title),
+   "DESCRIPTION:"+escapeICS("Persona: "+event.person+"\nCodice turno: "+event.code),"END:VEVENT"].join("\r\n")),
+  "END:VCALENDAR",""
+ ].join("\r\n");
+ const blob=new Blob([content],{type:isGoogle?"text/csv;charset=utf-8":"text/calendar;charset=utf-8"});
  $("exportMessage").classList.remove("hidden");$("exportMessage").textContent="Preparazione calendario…";
  try{
-  let message=await deliverFile(blob,"TurniSync-turni.ics");
+  let message=await deliverFile(blob,filename,target);
   if(state.settings.duplicates){
     state.settings.duplicateHistory=[...new Set([...state.settings.duplicateHistory,...exportedKeys])].slice(-2000);
     if(!writeLocal("ts_settings",JSON.stringify(state.settings)))message+=" Nota: impossibile salvare lo storico duplicati su questo browser.";
@@ -610,8 +663,10 @@ $("saveSettings").onclick=()=>{
   if(!writeLocal("ts_settings",JSON.stringify(state.settings))){
     $("homeMessage").textContent="Impostazioni usate per questa sessione, ma il browser non ha consentito di salvarle.";return;
   }
+  renderDeviceInfo();
   $("homeMessage").textContent="Impostazioni salvate solo in questo browser/dispositivo.";
 };
+ $("calendarPreference").addEventListener("change",renderDeviceInfo);
 $("resetBtn").onclick=()=>{
   if(!confirm("Cancellare persone e turni della sessione?"))return;
   state.people=[];state.selected.clear();state.shifts=[];state.image=null;

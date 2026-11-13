@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="TurniSync">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
-  <link rel="stylesheet" href="./style.css?v=0.5.13">
+  <link rel="stylesheet" href="./style.css?v=0.5.14">
   <title>TurniSync</title>
 </head>
 <body>
@@ -79,14 +79,14 @@
       </div>
       <div id="shiftList" class="shift-list"><div class="panel empty">Nessun turno ancora. Analizza uno screenshot dalla Home.</div></div>
       <button id="exportBtn" class="primary" disabled>Conferma ed esporta calendario</button>
-      <div class="message">Apple Calendar usa il file .ics. Google e Outlook sono selezionabili come destinazione preferita; l'inserimento diretto richiederà la configurazione OAuth.</div>
+      <div id="exportGuide" class="message">Il formato del file dipende dal calendario selezionato nelle impostazioni.</div>
       <div id="exportMessage" class="message success hidden"></div>
     </section>
 
     <section id="settings" class="screen">
       <div class="section-head"><div class="eyebrow">PERSONALIZZAZIONE</div><h2>Impostazioni</h2><p>Configura gli orari e il comportamento di TurniSync.</p></div>
       <div class="panel">
-        <h3>Dispositivo e calendario</h3><div id="deviceInfo" class="message">Rilevamento dispositivo…</div><label class="field-label" for="calendarPreference">Calendario preferito</label><select id="calendarPreference" class="field"><option value="auto">Automatico · calendario del dispositivo</option><option value="apple">Apple Calendar / file .ics</option><option value="google">Google Calendar</option><option value="outlook">Microsoft Outlook</option></select><p class="fineprint">La preferenza viene salvata su questo dispositivo. L'inserimento diretto Google e Outlook sarà attivato con OAuth.</p><label class="field-label" for="preferredName">Nome preferito</label>
+        <h3>Dispositivo e calendario</h3><div id="deviceInfo" class="message">Rilevamento dispositivo…</div><label class="field-label" for="calendarPreference">Calendario preferito</label><select id="calendarPreference" class="field"><option value="auto">Automatico · calendario del dispositivo</option><option value="apple">Apple Calendar · iCalendar (.ics)</option><option value="google">Google Calendar · CSV</option><option value="outlook">Microsoft Outlook · iCalendar (.ics)</option></select><p id="calendarFormatHint" class="fineprint">La scelta determina il formato del file esportato. Salva le impostazioni per applicarla.</p><label class="field-label" for="preferredName">Nome preferito</label>
         <input id="preferredName" class="field" placeholder="Es. Mario Rossi">
         <label class="check-row"><input id="duplicateCheck" type="checkbox" checked> Evita duplicati anche tra esportazioni successive</label>
         <label class="field-label">Fuso orario</label><div class="static-field">Europe/Rome</div>
@@ -105,9 +105,9 @@
     </section>
   </main>
 
-  <footer>TurniSync · versione 0.5.13 · elaborazione locale</footer>
+  <footer>TurniSync · versione 0.5.14 · elaborazione locale</footer>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script src="./app.js?v=0.5.13"></script>
+  <script src="./app.js?v=0.5.14"></script>
 </body>
 </html>
 
