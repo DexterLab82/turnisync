@@ -1,3 +1,5 @@
+const APP_VERSION = "0.5.10";
+const APP_BUILD = "2026-11-13";
 const $ = (id) => document.getElementById(id);
 const savedPreferredSelection = (() => {
   try {
@@ -104,7 +106,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.5.9",generatedAt:new Date().toISOString(),
+  return {appVersion:APP_VERSION,build:APP_BUILD,generatedAt:new Date().toISOString(),runtime:{url:location.href,serviceWorkerController:!!navigator.serviceWorker?.controller,serviceWorkerScript:"sw.js?v="+APP_VERSION,userAgent:navigator.userAgent},
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -498,12 +500,26 @@ $("resetBtn").onclick=()=>{
   renderPeople();renderShifts();
 };
 async function refreshApplication(){
-  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.9…";}
+  const btn=$("refreshAppBtn"),message=$("homeMessage");
+  if(btn){btn.disabled=true;btn.textContent="Verifico aggiornamenti…";}
   try{
-    if("serviceWorker" in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()));}
-    if("caches" in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith("turnisync-")).map(k=>caches.delete(k)));}
-  }catch(err){console.warn("Aggiornamento cache:",err);}
-  const url=new URL(location.href);url.searchParams.set("refresh","0.5.9-"+Date.now().toString());location.replace(url.toString());
+    if("serviceWorker" in navigator){
+      const reg=await navigator.serviceWorker.getRegistration(location.href);
+      if(reg){await reg.update();await reg.unregister();}
+    }
+    if("caches" in window){
+      const keys=await caches.keys();
+      await Promise.all(keys.filter(k=>k.startsWith("turnisync-")).map(k=>caches.delete(k)));
+    }
+    const url=new URL(location.href);
+    url.searchParams.set("refresh",APP_VERSION+"-"+Date.now());
+    url.hash="";
+    location.replace(url.toString());
+  }catch(err){
+    console.error("Aggiornamento TurniSync:",err);
+    if(message)message.textContent="Aggiornamento non riuscito: "+err.message+". Chiudi e riapri TurniSync.";
+    if(btn){btn.disabled=false;btn.textContent="↻ Riprova aggiornamento";}
+  }
 }
 $("refreshAppBtn")?.addEventListener("click",refreshApplication);
 let deferredInstallPrompt=null;
@@ -535,4 +551,4 @@ $("installHelpBtn")?.addEventListener("click",async()=>{
 setupInstallButton();
 loadSettings();
 if("serviceWorker" in navigator && location.protocol.startsWith("http"))
-  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.9",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
+  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v="+APP_VERSION,{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
