@@ -305,7 +305,7 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
   }
   const shifts=[];
   if(calendarValid){
-    await worker.setParameters({tessedit_pageseg_mode:"10",tessedit_char_whitelist:"123RF"});
+    await worker.setParameters({tessedit_pageseg_mode:"10"});
     for(let p=0;p<people.length;p++){
       const person=people[p],row=person.row,top=y[row+2],bottom=y[row+3];
       for(let day=1;day<=grid.days;day++){
@@ -321,7 +321,7 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
           const start=dateAt(date,cfg.start),end=dateAt(date,cfg.end);
           if(end<=start)end.setDate(end.getDate()+1);
           shifts.push({id:crypto.randomUUID?crypto.randomUUID():Date.now()+"-"+Math.random(),person:person.name,date:isoDate(date),
-            code,start:isoLocal(start),end:isoLocal(end),confidence,review:confidence<.62||raw.length!==1});
+            code,start:isoLocal(start),end:isoLocal(end),confidence,review:confidence<.70||raw.length!==1});
         }else if(codes.length&&hasLeave){
           warnings.push(person.name+", giorno "+day+": cella ambigua ("+raw+").");
         }else if(raw&&!hasLeave){
