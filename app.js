@@ -1,4 +1,4 @@
-const APP_VERSION = "0.5.12";
+const APP_VERSION = "0.5.13";
 const APP_BUILD = "2026-11-13";
 const $ = (id) => document.getElementById(id);
 const DEFAULT_SETTINGS = {
@@ -284,6 +284,22 @@ function cleanPersonName(value){
   if(name==="MAINT ANDREA")name="MAINI ANDREA";
   return name;
 }
+function binaryNameCanvas(canvas){
+  const ctx=canvas.getContext("2d",{willReadFrequently:true}),image=ctx.getImageData(0,0,canvas.width,canvas.height),histogram=new Uint32Array(256);
+  for(let i=0;i<image.data.length;i+=4)histogram[Math.round((image.data[i]+image.data[i+1]+image.data[i+2])/3)]++;
+  const total=image.data.length/4;let sum=0;for(let i=0;i<256;i++)sum+=i*histogram[i];
+  let background=0,backgroundWeight=0,bestVariance=-1,threshold=170;
+  for(let i=0;i<256;i++){
+    backgroundWeight+=histogram[i];if(!backgroundWeight)continue;
+    const foregroundWeight=total-backgroundWeight;if(!foregroundWeight)break;
+    background+=i*histogram[i];
+    const meanBackground=background/backgroundWeight,meanForeground=(sum-background)/foregroundWeight;
+    const variance=backgroundWeight*foregroundWeight*(meanBackground-meanForeground)**2;
+    if(variance>bestVariance){bestVariance=variance;threshold=i;}
+  }
+  for(let i=0;i<image.data.length;i+=4){const gray=(image.data[i]+image.data[i+1]+image.data[i+2])/3,v=gray<=threshold?0:255;image.data[i]=image.data[i+1]=image.data[i+2]=v;}
+  ctx.putImageData(image,0,0);return canvas;
+}
 async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) {
   const warnings=[],grid=detectGridLines(sourceCanvas),cellDiagnostics=[];
   const x=grid.xLines,y=grid.yLines;
@@ -356,18 +372,52 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
   if(!year)warnings.push("Anno non riconosciuto nell’intestazione o nel testo OCR.");
   const daysInMonth=month&&year?new Date(year,month,0).getDate():null;
   if(daysInMonth&&daysInMonth!==grid.days)warnings.push("Il numero di colonne ("+grid.days+") non coincide con i giorni del mese ("+daysInMonth+").");
-  const people=[];
-  await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZÀÈÉÌÒÙ "});
-  for(let row=0;row<grid.peopleRows;row++){
-    const top=y[row+2],bottom=y[row+3],left=x[0],right=x[1];
-    const nameCanvas=crop(left+8,top+3,right-8,bottom-3,3);
-    const result=await worker.recognize(nameCanvas);
-    const name=cleanPersonName(result.data.text);
-    if(name.length>=4&&/[A-ZÀ-Ü]{3,}/.test(name))people.push({name,row:row+2,confidence:(result.data.confidence||0)/100});
+  const people=[],nameDiagnostics=[];
+  const extraHeader=(data.lines||[]).some(line=>{
+    const cy=((line.bbox?.y0||0)+(line.bbox?.y1||0))/2;
+    return cy>=y[2]&&cy<y[3]&&/\b(DIA|GIORNO|NOMINATIVI)\b/i.test(line.text||"");
+  });
+  const firstNameRow=extraHeader?3:2,nameRows=Math.max(0,y.length-firstNameRow-1);
+  const nameWhitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZÀÈÉÌÒÙ'’- ";
+  const isName=value=>{const letters=value.replace(/[^A-ZÀ-Ü]/g,"");return letters.length>=4&&/[A-ZÀ-Ü]{3,}/.test(value);};
+  const fallbackName=(top,bottom)=>{
+    const tokens=(data.words||[]).filter(word=>{
+      const box=word.bbox||{},cx=((box.x0||0)+(box.x1||0))/2,cy=((box.y0||0)+(box.y1||0))/2;
+      return cx>=x[0]&&cx<x[1]-8&&cy>=top&&cy<bottom&&/[A-ZÀ-Ü]{2,}/i.test(word.text||"");
+    }).sort((a,b)=>(a.bbox?.x0||0)-(b.bbox?.x0||0));
+    const value=cleanPersonName(tokens.map(token=>token.text).join(" "));
+    return {name:value,confidence:tokens.length?tokens.reduce((sum,token)=>sum+(token.confidence||0),0)/tokens.length:0,source:"OCR completo"};
+  };
+  for(let row=0;row<nameRows;row++){
+    const gridRow=row+firstNameRow,top=y[gridRow],bottom=y[gridRow+1],left=x[0],right=x[1];
+    const cell=crop(left+5,top+1,right-5,bottom-1,4),binary=binaryNameCanvas(crop(left+5,top+1,right-5,bottom-1,5));
+    const attempts=[];
+    await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:nameWhitelist});
+    let result=await worker.recognize(cell),name=cleanPersonName(result.data.text),confidence=result.data.confidence||0;
+    attempts.push({psm:7,raw:result.data.text||"",confidence:Number(confidence.toFixed(1))});
+    let selected={name,confidence,source:"cella PSM 7"};
+    if(!isName(name)||confidence<68||!name.includes(" ")){
+      await worker.setParameters({tessedit_pageseg_mode:"13",tessedit_char_whitelist:nameWhitelist});
+      result=await worker.recognize(binary);name=cleanPersonName(result.data.text);confidence=result.data.confidence||0;
+      attempts.push({psm:13,raw:result.data.text||"",confidence:Number(confidence.toFixed(1))});
+      if(isName(name)&&(confidence>selected.confidence||!isName(selected.name)))selected={name,confidence,source:"cella binarizzata PSM 13"};
+    }
+    if(!isName(selected.name)||selected.confidence<45){
+      await worker.setParameters({tessedit_pageseg_mode:"6",tessedit_char_whitelist:nameWhitelist});
+      result=await worker.recognize(cell);name=cleanPersonName(result.data.text);confidence=result.data.confidence||0;
+      attempts.push({psm:6,raw:result.data.text||"",confidence:Number(confidence.toFixed(1))});
+      if(isName(name)&&(confidence>selected.confidence||!isName(selected.name)))selected={name,confidence,source:"cella PSM 6"};
+    }
+    const global=fallbackName(top,bottom);
+    if(isName(global.name)&&(!isName(selected.name)||global.confidence>selected.confidence+5))selected=global;
+    else if(isName(global.name)&&isName(selected.name)&&normalize(global.name)===normalize(selected.name))selected.confidence=Math.max(selected.confidence,global.confidence);
+    const accepted=isName(selected.name);
+    nameDiagnostics.push({row:gridRow,name:accepted?selected.name:"",confidence:Number((selected.confidence||0).toFixed(1)),source:selected.source,attempts,globalCandidate:global.name||""});
+    if(accepted)people.push({name:selected.name,row:gridRow,confidence:(selected.confidence||0)/100});
   }
   const calendarValid=!!month&&!!year&&daysInMonth===grid.days&&people.length>0;
   if(!people.length)warnings.push("Nessun nominativo riconosciuto nella prima colonna: controlla che la tabella sia completa e leggibile.");
-  else if(people.length<grid.peopleRows)warnings.push("Riconosciuti "+people.length+" nominativi su "+grid.peopleRows+" righe candidate; verifica l’elenco prima dell’esportazione.");
+  else if(people.length<nameRows)warnings.push("Riconosciuti "+people.length+" nominativi su "+nameRows+" righe: alcune righe sono state saltate. Controlla la tabella prima dell’esportazione.");
   if(!month||!year||daysInMonth!==grid.days)warnings.push("Turni non esportabili finché intestazione e numero di giorni non sono coerenti.");
   const shifts=[];
   if(calendarValid&&!weekdayConflict){
@@ -406,8 +456,8 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
   return {people:people.map(p=>p.name).sort((a,b)=>a.localeCompare(b,"it")),shifts,warnings,
     period:month&&year?(monthName+"/"+year):"non riconosciuto",
     debug:{method:"grid-lines-adaptive",monthRaw,monthSource,monthConfidence:monthResult.data.confidence,yearRaw,yearConfidence:yearResult.data.confidence,
-      grid:{xLines:x,yLines:y,days:grid.days,peopleRows:grid.peopleRows,threshold:grid.threshold},weekdayChecks,
-      names:people.map(p=>({name:p.name,row:p.row,confidence:p.confidence})),cellCount:cellDiagnostics.length,cells:cellDiagnostics}};
+      grid:{xLines:x,yLines:y,days:grid.days,peopleRows:nameRows,threshold:grid.threshold,extraHeader},weekdayChecks,
+      names:people.map(p=>({name:p.name,row:p.row,confidence:p.confidence})),nameDiagnostics,cellCount:cellDiagnostics.length,cells:cellDiagnostics}};
 }
 function dateAt(date,time) {
   const [h,m] = time.split(":").map(Number);
