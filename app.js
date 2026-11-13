@@ -6,18 +6,14 @@ const savedPreferredSelection = (() => {
   } catch { return []; }
 })();
 const legacyPreferred = localStorage.getItem("ts_preferred") || "";
+function detectDevice(){const ua=navigator.userAgent||"";if(/iPhone|iPad|iPod/i.test(ua))return {label:"Apple / iOS",target:"apple"};if(/Android/i.test(ua))return {label:"Android",target:"google"};if(/Windows/i.test(ua))return {label:"Windows",target:"outlook"};if(/Macintosh|Mac OS X/i.test(ua))return {label:"macOS",target:"apple"};return {label:"Altro dispositivo",target:"ics"};}
+const deviceInfo=detectDevice();
+const storedSettings=(()=>{try{return JSON.parse(localStorage.getItem("ts_settings")||"null")||{};}catch{return {};}})();
 const state = {
   image: null, people: [], selected: new Set(), shifts: [], debugReport: null,
   preferred: legacyPreferred,
   preferredSelection: savedPreferredSelection.length ? savedPreferredSelection : (legacyPreferred ? [legacyPreferred] : []),
-  settings: JSON.parse(localStorage.getItem("ts_settings") || "null") || {
-    codes: {
-      1: { name: "Mattina", start: "06:00", end: "14:00" },
-      2: { name: "Pomeriggio", start: "14:00", end: "22:00" },
-      3: { name: "Notte", start: "22:00", end: "06:00" }
-    },
-    duplicates: true
-  }
+  settings: {...{codes:{1:{name:"Mattina",start:"06:00",end:"14:00"},2:{name:"Pomeriggio",start:"14:00",end:"22:00"},3:{name:"Notte",start:"22:00",end:"06:00"}},duplicates:true,calendarPreference:"auto",duplicateHistory:[]},...storedSettings}
 };
 
 document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -436,6 +432,9 @@ function renderShifts() {
     actions.append(remove,save);card.append(title,meta,edit,actions);list.append(card);
   });
 }
+function shiftFingerprint(s){return [normalize(s.person),s.start,s.end].join("|");}
+function stableUid(value){let h=2166136261;for(let i=0;i<value.length;i++){h^=value.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16);}
+function renderDeviceInfo(){const el=$("deviceInfo");if(el)el.textContent="Dispositivo rilevato: "+deviceInfo.label+". La modalità automatica seleziona "+({apple:"Apple Calendar",google:"Google Calendar",outlook:"Outlook",ics:"file .ics"}[deviceInfo.target])+".";}
 function escapeICS(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\n/g,"\\n");}
 function icsDate(s){return s.replace(/[-:]/g,"")+"00";}
 $("exportBtn").onclick=()=>{
@@ -459,6 +458,28 @@ $("exportBtn").onclick=()=>{
   $("exportMessage").classList.remove("hidden");
   $("exportMessage").textContent=`Creato file calendario con ${events.length} eventi. Aprilo da File e importa gli eventi nel Calendario Apple.`;
 };
+
+// Controllo duplicati persistente tra esportazioni effettuate su questo dispositivo.
+$("exportBtn").onclick=()=>{
+ const chosen=state.shifts.filter(s=>state.selected.has(s.person));if(!chosen.length)return;
+ if(chosen.some(s=>s.review)){alert("Ci sono turni da verificare prima dell'esportazione.");return;}
+ const target=state.settings.calendarPreference==="auto"?deviceInfo.target:state.settings.calendarPreference;
+ const seen=new Set(),events=[],history=state.settings.duplicateHistory||[],skipped=[];
+ for(const s of chosen){
+  const key=shiftFingerprint(s),title=({1:"Turno Mattina",2:"Turno Pomeriggio",3:"Turno Notte"})[s.code];
+  if(state.settings.duplicates&&(seen.has(key)||history.includes(key))){skipped.push(s);continue;}seen.add(key);
+  events.push(["BEGIN:VEVENT",`UID:${stableUid(key)}-${encodeURIComponent(s.person)}@turnisync.local`,
+   `DTSTAMP:${new Date().toISOString().replace(/[-:]/g,"").replace(/\\.\\d{3}/,"")}`,
+   `DTSTART;TZID=Europe/Rome:${icsDate(s.start)}`,`DTEND;TZID=Europe/Rome:${icsDate(s.end)}`,
+   `SUMMARY:${escapeICS(title+" · "+s.person)}`,`DESCRIPTION:${escapeICS("Persona: "+s.person+"\\nCodice turno: "+s.code)}`,"END:VEVENT"].join("\\r\\n"));
+ }
+ if(!events.length){$("exportMessage").classList.remove("hidden");$("exportMessage").textContent="Nessun nuovo turno: "+skipped.length+" duplicati già esportati.";return;}
+ const calendar=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//TurniSync//IT","CALSCALE:GREGORIAN","BEGIN:VTIMEZONE","TZID:Europe/Rome","END:VTIMEZONE",...events,"END:VCALENDAR"].join("\\r\\n");
+ const blob=new Blob([calendar],{type:"text/calendar;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="TurniSync-turni.ics";document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);
+ state.settings.duplicateHistory=[...new Set([...history,...seen])].slice(-5000);localStorage.setItem("ts_settings",JSON.stringify(state.settings));
+ $("exportMessage").classList.remove("hidden");$("exportMessage").textContent="File .ics creato: "+events.length+" nuovi eventi, "+skipped.length+" duplicati esclusi. Destinazione selezionata: "+target+".";
+};
+
 function loadSettings(){
   $("preferredName").value=state.preferred;$("duplicateCheck").checked=state.settings.duplicates;
   for(let i=1;i<=3;i++){$("s"+i+"start").value=state.settings.codes[i].start;$("s"+i+"end").value=state.settings.codes[i].end;}
@@ -468,7 +489,7 @@ $("saveSettings").onclick=()=>{
   state.preferredSelection=state.preferred?[state.preferred]:[];
   localStorage.setItem("ts_preferred",state.preferred);
   localStorage.setItem("ts_preferred_selection",JSON.stringify(state.preferredSelection));
-  state.settings.duplicates=$("duplicateCheck").checked;
+  state.settings.duplicates=$("duplicateCheck").checked;state.settings.calendarPreference=$("calendarPreference").value;
   for(let i=1;i<=3;i++){state.settings.codes[i].start=$("s"+i+"start").value;state.settings.codes[i].end=$("s"+i+"end").value;}
   localStorage.setItem("ts_settings",JSON.stringify(state.settings));
   $("homeMessage").textContent="Impostazioni salvate sul dispositivo.";
