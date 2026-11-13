@@ -275,7 +275,7 @@ async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) 
   const daysInMonth=month&&year?new Date(year,month,0).getDate():null;
   if(daysInMonth&&daysInMonth!==grid.days)warnings.push("Il numero di colonne ("+grid.days+") non coincide con i giorni del mese ("+daysInMonth+").");
   const people=[];
-  await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
+  await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZÀÈÉÌÒÙ "});
   for(let row=0;row<grid.peopleRows;row++){
     const top=y[row+2],bottom=y[row+3],left=x[0],right=x[1];
     const nameCanvas=crop(left+8,top+3,right-8,bottom-3,3);
