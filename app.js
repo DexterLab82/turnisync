@@ -6,7 +6,7 @@ const savedPreferredSelection = (() => {
   } catch { return []; }
 })();
 const legacyPreferred = localStorage.getItem("ts_preferred") || "";
-function detectDevice(){const ua=navigator.userAgent||"";if(/iPhone|iPad|iPod/i.test(ua))return {label:"Apple / iOS",target:"apple"};if(/Android/i.test(ua))return {label:"Android",target:"google"};if(/Windows/i.test(ua))return {label:"Windows",target:"outlook"};if(/Macintosh|Mac OS X/i.test(ua))return {label:"macOS",target:"apple"};return {label:"Altro dispositivo",target:"ics"};}
+function detectDevice(){const ua=navigator.userAgent||"";if(/iPhone|iPad|iPod/i.test(ua)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1))return {label:"Apple / iOS",target:"apple"};if(/Android/i.test(ua))return {label:"Android",target:"google"};if(/Windows/i.test(ua))return {label:"Windows",target:"outlook"};if(/Macintosh|Mac OS X/i.test(ua))return {label:"macOS",target:"apple"};return {label:"Altro dispositivo",target:"ics"};}
 const deviceInfo=detectDevice();
 const storedSettings=(()=>{try{return JSON.parse(localStorage.getItem("ts_settings")||"null")||{};}catch{return {};}})();
 const state = {
