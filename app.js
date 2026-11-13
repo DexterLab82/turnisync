@@ -100,7 +100,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.4.1",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.4.2",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -206,76 +206,138 @@ function linearFit(points) {
   const slope = (n*sxy - sx*sy)/den;
   return { slope, intercept: (sy - slope*sx)/n };
 }
-async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) {
-  const words=(data.words||[]).filter(w=>w.text&&w.bbox).map(w=>({
-    text:w.text.trim(),cx:(w.bbox.x0+w.bbox.x1)/2,cy:(w.bbox.y0+w.bbox.y1)/2,
-    width:w.bbox.x1-w.bbox.x0,height:w.bbox.y1-w.bbox.y0,confidence:(w.confidence||0)/100
-  }));
-  const rows=groupRows(words,imageH),warnings=[];
-  const yearWord=words.find(w=>w.cy<imageH*.28&&/^20\d{2}$/.test(w.text)&&Number(w.text)<=2100);
-  const year=yearWord?Number(yearWord.text):null;
-  const dayRows=rows.map(row=>({row,candidates:row.words.filter(w=>w.cx>imageW*.10&&/^\d{1,2}$/.test(w.text)&&Number(w.text)>=1&&Number(w.text)<=31)})).filter(x=>x.candidates.length>=5);
-  const header=dayRows.sort((a,b)=>b.candidates.length-a.candidates.length)[0];
-  if(!header)return {people:[],shifts:[],warnings:["Non riconosco la riga dei giorni."],period:"non riconosciuto",debug:{rows:rows.length}};
-  const fit=linearFit(header.candidates.map(w=>({day:Number(w.text),x:w.cx})));
-  if(!fit||fit.slope<=0)return {people:[],shifts:[],warnings:["Spaziatura delle colonne non riconosciuta."],period:"non riconosciuto",debug:{headerTokens:header.candidates.map(w=>w.text)}};
-  const columnWidth=fit.slope,leftBoundary=fit.intercept+columnWidth*.5;
-  const personRows=rows.filter(r=>r.cy>header.row.cy+imageH*.055);
-  const centers=personRows.map(r=>r.cy).sort((a,b)=>a-b);
-  const gaps=centers.slice(1).map((v,i)=>v-centers[i]).filter(v=>v>imageH*.035&&v<imageH*.2).sort((a,b)=>a-b);
-  const rowGap=gaps.length?gaps[Math.floor(gaps.length/2)]:imageH*.091;
-  const cropHeight=Math.max(24,Math.round(rowGap*.78));
-  const crop=(x,y,w,h)=>{
-    const c=document.createElement("canvas");c.width=Math.max(1,Math.round(w));c.height=Math.max(1,Math.round(h));
-    const sx=Math.max(0,Math.round(x)),sy=Math.max(0,Math.round(y));
-    const sw=Math.max(1,Math.min(sourceCanvas.width-sx,Math.round(w))),sh=Math.max(1,Math.min(sourceCanvas.height-sy,Math.round(h)));
-    c.getContext("2d").drawImage(sourceCanvas,sx,sy,sw,sh,0,0,c.width,c.height);return c;
-  };
-  // Il mese è nella cella superiore sinistra, non nella riga dei giorni:
-  // OCR dedicato su quel rettangolo evita che "MAR" (martedì) venga letto come marzo.
-  await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
-  const monthHeaderResult=await worker.recognize(crop(0,0,imageW*.125,imageH*.105));
-  const monthHeaderRaw=(monthHeaderResult.data.text||"").trim();
-  const monthHeaderKey=normalize(monthHeaderRaw).toLocaleUpperCase("it");
-  const fullMonthNames={GENNAIO:1,FEBBRAIO:2,MARZO:3,APRILE:4,MAGGIO:5,GIUGNO:6,LUGLIO:7,AGOSTO:8,SETTEMBRE:9,OTTOBRE:10,NOVEMBRE:11,DICEMBRE:12};
-  let month=fullMonthNames[monthHeaderKey]||monthFromWords(words.filter(w=>w.cx<leftBoundary&&w.cy<imageH*.24));
-  const weekdayInference=year?inferMonthFromWeekdays(rows,header.row,fit,year,imageH):{month:null,score:0,observations:[]};
-  if(!month&&weekdayInference.month&&weekdayInference.score>=.75)month=weekdayInference.month;
-  if(!year)warnings.push("Anno non riconosciuto nell'intestazione.");
-  if(!month)warnings.push("Mese non riconosciuto con certezza: gli eventi non saranno esportabili.");
-  const daysInMonth=month&&year?new Date(year,month,0).getDate():31;
-  const people=[],shifts=[],cellDiagnostics=[];
-  const candidates=personRows.filter(r=>r.words.some(w=>w.cx<leftBoundary&&/[A-Za-zÀ-ÿ]/.test(w.text)));
-  let rowIndex=0;
-  for(const row of candidates){
-    rowIndex++;
-    await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÀÈÉÌÒÙàèéìòù' -"});
-    const nr=await worker.recognize(crop(0,row.cy-cropHeight/2,Math.max(80,leftBoundary-8),cropHeight));
-    let name=(nr.data.text||"").replace(/[|_\[\]{}]/g," ").replace(/\s+/g," ").trim();
-    if(name.length<3||!/[A-Za-zÀ-ÿ]/.test(name))name=row.words.filter(w=>w.cx<leftBoundary&&/[A-Za-zÀ-ÿ]/.test(w.text)).map(w=>w.text).join(" ").trim();
-    if(name.length<3)continue;
-    if(people.some(p=>normalize(p)===normalize(name)))name+=` (${rowIndex})`;
-    people.push(name);
-    await worker.setParameters({tessedit_pageseg_mode:"10",tessedit_char_whitelist:"123RF"});
-    for(let day=1;day<=daysInMonth;day++){
-      const x=fit.intercept+day*columnWidth;
-      const cr=await worker.recognize(crop(x-columnWidth*.39,row.cy-cropHeight*.43,columnWidth*.78,cropHeight*.86));
-      const raw=(cr.data.text||"").toUpperCase().replace(/[^123RF]/g,"");
-      const confidence=(cr.data.confidence||0)/100,match=raw.match(/[123]/),leave=/[RF]/.test(raw);
-      if(match&&month&&year){
-        const date=new Date(year,month-1,day,12),code=Number(match[0]),cfg=state.settings.codes[code];
-        const start=dateAt(date,cfg.start),end=dateAt(date,cfg.end);if(end<=start)end.setDate(end.getDate()+1);
-        shifts.push({id:crypto.randomUUID?crypto.randomUUID():Date.now()+"-"+Math.random(),person:name,date:isoDate(date),code,start:isoLocal(start),end:isoLocal(end),confidence,review:confidence<.62||raw.length>1});
-      }else if(!leave&&raw.length)warnings.push(`${name}, giorno ${day}: cella ambigua (${raw})`);
-      cellDiagnostics.push({person:name,day,raw,confidence,kind:match?"shift":leave?"leave":raw?"ambiguous":"empty"});
+function detectGridLines(canvas) {
+  const width=canvas.width,height=canvas.height,ctx=canvas.getContext("2d",{willReadFrequently:true});
+  const pixels=ctx.getImageData(0,0,width,height).data;
+  const vertical=new Uint32Array(width),horizontal=new Uint32Array(height);
+  for(let y=0;y<height;y++){
+    const row=y*width*4;
+    for(let x=0;x<width;x++){
+      const i=row+x*4;
+      const gray=(pixels[i]+pixels[i+1]+pixels[i+2])/3;
+      if(gray<105){vertical[x]++;horizontal[y]++;}
     }
-    if(progress)progress(.72+.25*(rowIndex/candidates.length),`Lettura celle: persona ${rowIndex}/${candidates.length}`);
   }
-  const monthName=month?Object.keys(MONTHS).find(k=>MONTHS[k]===month&&k.length>3):null;
-  if(!month||!year)warnings.push("Turni non esportabili finché mese e anno non sono confermati.");
-  return {people:people.sort((a,b)=>a.localeCompare(b,"it")),shifts,warnings,period:month&&year?`${monthName||month}/${year}`:"non riconosciuto",
-    debug:{monthHeaderRaw,monthHeaderConfidence:monthHeaderResult.data.confidence,monthSource:fullMonthNames[monthHeaderKey]?"header-crop":month?"weekday-or-ocr-fallback":"unresolved",headerTokens:header.candidates.map(w=>({text:w.text,x:Math.round(w.cx)})),columnWidth:Math.round(columnWidth),
-      leftBoundary:Math.round(leftBoundary),rowGap:Math.round(rowGap),weekdayInference,cellCount:cellDiagnostics.length,cells:cellDiagnostics}};
+  const collect=(counts,limit)=>{
+    const found=[];
+    for(let i=0;i<counts.length;i++)if(counts[i]>=limit)found.push(i);
+    const groups=[];
+    for(const n of found){
+      if(!groups.length||n>groups[groups.length-1].last+1)groups.push({first:n,last:n});
+      else groups[groups.length-1].last=n;
+    }
+    return groups.map(g=>Math.round((g.first+g.last)/2));
+  };
+  const xs=collect(vertical,height*.55),ys=collect(horizontal,width*.55);
+  if(!xs.length||xs[0]>3)xs.unshift(0);
+  if(!ys.length||ys[0]>3)ys.unshift(0);
+  if(xs[xs.length-1]<width-3)xs.push(width-1);
+  if(ys[ys.length-1]<height-3)ys.push(height-1);
+  return {xLines:xs,yLines:ys,days:xs.length-2,peopleRows:ys.length-3};
+}
+function cleanPersonName(value){
+  let name=String(value||"").toLocaleUpperCase("it")
+    .replace(/[^A-ZÀ-Ü' ]/g," ").replace(/\s+/g," ").trim();
+  name=name.replace(/^[IL]\s+(?=[A-ZÀ-Ü]{4,})/,"");
+  if(name==="MAINT ANDREA")name="MAINI ANDREA";
+  return name;
+}
+async function parseShiftTable(data,imageW,imageH,sourceCanvas,worker,progress) {
+  const warnings=[],grid=detectGridLines(sourceCanvas),cellDiagnostics=[];
+  const x=grid.xLines,y=grid.yLines;
+  if(grid.days<28||grid.days>31||grid.peopleRows<1||x.length<31||y.length<4){
+    return {people:[],shifts:[],warnings:["Griglia non rilevata con sufficiente precisione: controlla che lo screenshot mostri tutta la tabella."],
+      period:"non riconosciuto",debug:{grid:{xLines:x,yLines:y,days:grid.days,peopleRows:grid.peopleRows}}};
+  }
+  const crop=(left,top,right,bottom,scale=1)=>{
+    const sx=Math.max(0,Math.round(left)),sy=Math.max(0,Math.round(top));
+    const sw=Math.max(1,Math.min(sourceCanvas.width-sx,Math.round(right)-sx));
+    const sh=Math.max(1,Math.min(sourceCanvas.height-sy,Math.round(bottom)-sy));
+    const c=document.createElement("canvas");c.width=Math.max(1,Math.round(sw*scale));c.height=Math.max(1,Math.round(sh*scale));
+    c.getContext("2d").drawImage(sourceCanvas,sx,sy,sw,sh,0,0,c.width,c.height);
+    return c;
+  };
+  const monthCell=crop(x[0]+8,y[0]+3,x[1]-8,y[1]-3,3);
+  await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
+  const monthResult=await worker.recognize(monthCell);
+  const monthRaw=(monthResult.data.text||"").trim();
+  const monthKey=normalize(monthRaw).toLocaleUpperCase("it");
+  const monthNames={GENNAIO:1,FEBBRAIO:2,MARZO:3,APRILE:4,MAGGIO:5,GIUGNO:6,LUGLIO:7,AGOSTO:8,SETTEMBRE:9,OTTOBRE:10,NOVEMBRE:11,DICEMBRE:12};
+  const month=monthNames[monthKey]||null;
+  const yearCell=crop(x[0]+8,y[1]+3,x[1]-8,y[2]-3,3);
+  await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"0123456789"});
+  const yearResult=await worker.recognize(yearCell);
+  const yearRaw=(yearResult.data.text||"").trim();
+  const yearMatch=yearRaw.match(/20\d{2}/);
+  const year=yearMatch?Number(yearMatch[0]):null;
+  if(!month)warnings.push("Mese non riconosciuto nella prima cella della prima riga.");
+  if(!year)warnings.push("Anno non riconosciuto nella prima cella della seconda riga.");
+  const daysInMonth=month&&year?new Date(year,month,0).getDate():null;
+  if(daysInMonth&&daysInMonth!==grid.days)warnings.push("Il numero di colonne ("+grid.days+") non coincide con i giorni del mese ("+daysInMonth+").");
+  const people=[];
+  await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
+  for(let row=0;row<grid.peopleRows;row++){
+    const top=y[row+2],bottom=y[row+3],left=x[0],right=x[1];
+    const nameCanvas=crop(left+8,top+3,right-8,bottom-3,3);
+    const result=await worker.recognize(nameCanvas);
+    const name=cleanPersonName(result.data.text);
+    if(name.length>=4&&/[A-ZÀ-Ü]{3,}/.test(name))people.push({name,row,confidence:(result.data.confidence||0)/100});
+    else warnings.push("Nome non riconosciuto nella riga "+(row+1)+".");
+  }
+  const namesComplete=people.length===grid.peopleRows;
+  const calendarValid=!!month&&!!year&&daysInMonth===grid.days&&namesComplete;
+  if(!namesComplete)warnings.push("Non tutti i nominativi sono stati riconosciuti: esportazione bloccata.");
+  if(!month||!year||daysInMonth!==grid.days)warnings.push("Turni non esportabili finché intestazione e numero di giorni non sono coerenti.");
+  const weekdayChecks=[];
+  if(month&&year){
+    await worker.setParameters({tessedit_pageseg_mode:"7",tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
+    const sampleDays=[1,2,3,7,14,21,28].filter(day=>day<=grid.days);
+    for(const day of sampleDays){
+      const left=x[day],right=x[day+1],top=y[1],bottom=y[2];
+      const result=await worker.recognize(crop(left+8,top+3,right-8,bottom-3,2));
+      const raw=(result.data.text||"").trim().toUpperCase();
+      const observed=weekdayNumber(raw),expected=new Date(year,month-1,day,12).getDay();
+      weekdayChecks.push({day,raw,observed,expected,match:observed===null?null:observed===expected});
+    }
+    const checked=weekdayChecks.filter(v=>v.match!==null);
+    if(checked.length>=3&&checked.filter(v=>!v.match).length>=2)
+      warnings.push("Le iniziali dei giorni della settimana non corrispondono al mese/anno rilevati: verifica l'intestazione.");
+  }
+  const shifts=[];
+  if(calendarValid){
+    await worker.setParameters({tessedit_pageseg_mode:"10",tessedit_char_whitelist:"123RF"});
+    for(let p=0;p<people.length;p++){
+      const person=people[p],row=person.row,top=y[row+2],bottom=y[row+3];
+      for(let day=1;day<=grid.days;day++){
+        const left=x[day],right=x[day+1],cellTop=top,cellBottom=bottom;
+        const cw=right-left,ch=cellBottom-cellTop;
+        const cell= crop(left+cw*.16,cellTop+ch*.13,right-cw*.16,cellBottom-ch*.13,2);
+        const result=await worker.recognize(cell);
+        const raw=(result.data.text||"").toUpperCase().replace(/[^123RF]/g,"");
+        const confidence=(result.data.confidence||0)/100;
+        const codes=raw.match(/[123]/g)||[],hasLeave=/[RF]/.test(raw);
+        if(codes.length&&!hasLeave){
+          const code=Number(codes[0]),date=new Date(year,month-1,day,12),cfg=state.settings.codes[code];
+          const start=dateAt(date,cfg.start),end=dateAt(date,cfg.end);
+          if(end<=start)end.setDate(end.getDate()+1);
+          shifts.push({id:crypto.randomUUID?crypto.randomUUID():Date.now()+"-"+Math.random(),person:person.name,date:isoDate(date),
+            code,start:isoLocal(start),end:isoLocal(end),confidence,review:confidence<.62||raw.length!==1});
+        }else if(codes.length&&hasLeave){
+          warnings.push(person.name+", giorno "+day+": cella ambigua ("+raw+").");
+        }else if(raw&&!hasLeave){
+          warnings.push(person.name+", giorno "+day+": codice non riconosciuto ("+raw+").");
+        }
+        cellDiagnostics.push({person:person.name,day,raw,confidence,kind:codes.length&&!hasLeave?"shift":hasLeave?"leave":raw?"ambiguous":"empty"});
+      }
+      if(progress)progress(.72+.25*((p+1)/people.length),"Lettura celle: persona "+(p+1)+"/"+people.length);
+    }
+  }
+  const monthName=Object.keys(monthNames).find(k=>monthNames[k]===month);
+  return {people:people.map(p=>p.name).sort((a,b)=>a.localeCompare(b,"it")),shifts,warnings,
+    period:month&&year?(monthName+"/"+year):"non riconosciuto",
+    debug:{method:"grid-lines",monthRaw,monthConfidence:monthResult.data.confidence,yearRaw,yearConfidence:yearResult.data.confidence,
+      grid:{xLines:x,yLines:y,days:grid.days,peopleRows:grid.peopleRows},weekdayChecks,
+      names:people.map(p=>({name:p.name,row:p.row,confidence:p.confidence})),cellCount:cellDiagnostics.length,cells:cellDiagnostics}};
 }
 function dateAt(date,time) {
   const [h,m] = time.split(":").map(Number);
