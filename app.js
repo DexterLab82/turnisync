@@ -104,7 +104,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.5.5",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.5.6",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -425,8 +425,15 @@ function renderShifts() {
     edit.append(code,start,end,person);
     const actions=document.createElement("div");actions.className="shift-actions";
     const remove=document.createElement("button");remove.textContent="Rimuovi";remove.onclick=()=>{state.shifts=state.shifts.filter(x=>x.id!==s.id);renderShifts();};
+    code.onchange=()=>{const cfg=state.settings.codes[Number(code.value)];const d=new Date(s.date+"T12:00:00");const [sh,sm]=cfg.start.split(":").map(Number),[eh,em]=cfg.end.split(":").map(Number);const st=new Date(d.getFullYear(),d.getMonth(),d.getDate(),sh,sm),en=new Date(d.getFullYear(),d.getMonth(),d.getDate(),eh,em);if(en<=st)en.setDate(en.getDate()+1);start.value=isoLocal(st);end.value=isoLocal(en);};
     const save=document.createElement("button");save.textContent="Salva modifica";save.onclick=()=>{
-      s.code=Number(code.value);s.start=start.value;s.end=end.value;s.person=person.value.trim()||s.person;s.review=false;renderShifts();
+      const oldPerson=s.person,newPerson=person.value.trim()||oldPerson;
+      const startDate=new Date(start.value),endDate=new Date(end.value);
+      if(!start.value||!end.value||Number.isNaN(startDate.getTime())||Number.isNaN(endDate.getTime())||endDate<=startDate){alert("Intervallo orario non valido: la fine deve essere successiva all'inizio.");return;}
+      const wasSelected=state.selected.has(oldPerson);
+      s.code=Number(code.value);s.start=start.value;s.end=end.value;s.person=newPerson;s.review=false;
+      if(wasSelected&&newPerson!==oldPerson){state.selected.delete(oldPerson);state.selected.add(newPerson);}
+      renderShifts();renderPeople();
     };
     actions.append(remove,save);card.append(title,meta,edit,actions);list.append(card);
   });
@@ -455,7 +462,7 @@ $("exportBtn").onclick=async()=>{
   const key=[s.start,s.end,title,s.person].join("|");
   if(state.settings.duplicates&&seen.has(key))continue;seen.add(key);
   const stamp=new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z");
-  events.push(["BEGIN:VEVENT","UID:"+s.id+"@turnisync.local","DTSTAMP:"+stamp,
+  events.push(["BEGIN:VEVENT","UID:"+stableUid(normalize(s.person)+"|"+s.date+"|"+s.code)+"@turnisync.local","DTSTAMP:"+stamp,
    "DTSTART:"+icsDate(s.start),"DTEND:"+icsDate(s.end),
    "SUMMARY:"+escapeICS(title+" · "+s.person),
    "DESCRIPTION:"+escapeICS("Persona: "+s.person+"\nCodice turno: "+s.code),"END:VEVENT"].join("\r\n"));
@@ -488,15 +495,41 @@ $("resetBtn").onclick=()=>{
   renderPeople();renderShifts();
 };
 async function refreshApplication(){
-  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.5…";}
+  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.6…";}
   try{
     if("serviceWorker" in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()));}
     if("caches" in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith("turnisync-")).map(k=>caches.delete(k)));}
   }catch(err){console.warn("Aggiornamento cache:",err);}
-  const url=new URL(location.href);url.searchParams.set("refresh","0.5.5-"+Date.now().toString());location.replace(url.toString());
+  const url=new URL(location.href);url.searchParams.set("refresh","0.5.6-"+Date.now().toString());location.replace(url.toString());
 }
 $("refreshAppBtn")?.addEventListener("click",refreshApplication);
-$("installHelpBtn")?.addEventListener("click",()=>alert("Per installare TurniSync su iPhone: apri questa pagina in Safari, tocca Condividi e scegli “Aggiungi alla schermata Home”."));
+let deferredInstallPrompt=null;
+window.addEventListener("beforeinstallprompt",event=>{event.preventDefault();deferredInstallPrompt=event;});
+function isInstalledPWA(){return window.matchMedia("(display-mode: standalone)").matches||window.navigator.standalone===true;}
+function setupInstallButton(){
+ const btn=$("installHelpBtn"),status=$("installStatus");if(!btn)return;
+ if(isInstalledPWA()){btn.textContent="TurniSync già installato ✓";btn.disabled=true;if(status)status.textContent="L'app è già disponibile dalla schermata Home.";return;}
+ const ua=navigator.userAgent||"",ios=/iPhone|iPad|iPod/i.test(ua)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
+ const safari=/Safari/i.test(ua)&&!/CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/i.test(ua);
+ if(ios){btn.textContent="＋ Installa TurniSync";if(status)status.textContent=safari?"Aggiungi l'icona alla Home in pochi passaggi.":"Per installare, apri questa pagina in Safari.";return;}
+ if(deferredInstallPrompt){btn.textContent="＋ Installa TurniSync";if(status)status.textContent="Installa l'app sul dispositivo.";return;}
+ btn.textContent="＋ Come installare TurniSync";if(status)status.textContent="Aggiungi TurniSync alla schermata Home dal menu del browser.";
+}
+$("installHelpBtn")?.addEventListener("click",async()=>{
+ if(isInstalledPWA()){setupInstallButton();return;}
+ const ua=navigator.userAgent||"",ios=/iPhone|iPad|iPod/i.test(ua)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
+ const safari=/Safari/i.test(ua)&&!/CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/i.test(ua);
+ if(ios){
+  const msg=safari?"1. Tocca Condividi (il quadrato con la freccia in basso o in alto).\\n2. Scorri e seleziona “Aggiungi alla schermata Home”.\\n3. Conferma con “Aggiungi”.\\n\\nL'icona TurniSync comparirà sulla Home.":"Apri il menu del browser e scegli “Apri in Safari”. Poi in Safari: Condividi → Aggiungi alla schermata Home → Aggiungi.";
+  if($("installStatus"))$("installStatus").textContent=msg.replace(/\\n/g," ");
+  alert("Installazione TurniSync su iPhone\\n\\n"+msg);
+ }else if(deferredInstallPrompt){
+  deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;setupInstallButton();
+ }else{
+  alert("Apri il menu del browser e scegli “Installa app” oppure “Aggiungi alla schermata Home”.");
+ }
+});
+setupInstallButton();
 loadSettings();
 if("serviceWorker" in navigator && location.protocol.startsWith("http"))
-  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.5",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
+  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.6",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
