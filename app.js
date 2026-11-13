@@ -104,7 +104,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.4.4",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.5.2",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -437,16 +437,23 @@ function renderDeviceInfo(){const el=$("deviceInfo");if(el)el.textContent="Dispo
 function escapeICS(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\n/g,"\\n");}
 function icsDate(s){return s.replace(/[-:]/g,"")+"00";}
 async function deliverFile(blob,filename){
- const file=new File([blob],filename,{type:blob.type});
- if(navigator.canShare&&navigator.canShare({files:[file]})&&navigator.share){
-  try{await navigator.share({files:[file],title:filename});return "Condivisione aperta: scegli Salva su File o l'app Calendario.";}
-  catch(e){if(e.name==="AbortError")return "Operazione annullata.";throw e;}
- }
  const url=URL.createObjectURL(blob);
- const a=document.createElement("a");a.href=url;a.download=filename;a.target="_blank";a.rel="noopener";
- document.body.append(a);a.click();a.remove();
- setTimeout(()=>URL.revokeObjectURL(url),60000);
- return "File preparato. Se non parte il download, apri il collegamento e usa Condividi → Salva su File.";
+ const a=document.createElement("a");
+ a.href=url;a.download=filename;a.rel="noopener";
+ a.style.display="none";document.body.append(a);
+ try{
+  a.click();
+  $("exportMessage")?.classList.remove("hidden");
+  setTimeout(()=>URL.revokeObjectURL(url),120000);
+  return "Download avviato: "+filename+". Su iPhone il file viene salvato nella cartella Download configurata in Safari.";
+ }catch(err){
+  URL.revokeObjectURL(url);
+  if(navigator.canShare&&navigator.canShare({files:[new File([blob],filename,{type:blob.type})]})){
+   await navigator.share({files:[new File([blob],filename,{type:blob.type})],title:filename});
+   return "Seleziona Salva su File e scegli la cartella Download.";
+  }
+  throw err;
+ }finally{a.remove();}
 }
 $("exportBtn").onclick=async()=>{
  const chosen=state.shifts.filter(s=>state.selected.has(s.person));if(!chosen.length)return;
