@@ -104,7 +104,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.5.2",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.5.3",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -496,15 +496,15 @@ $("resetBtn").onclick=()=>{
   renderPeople();renderShifts();
 };
 async function refreshApplication(){
-  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.2…";}
+  const btn=$("refreshAppBtn");if(btn){btn.disabled=true;btn.textContent="Aggiorno 0.5.3…";}
   try{
     if("serviceWorker" in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()));}
     if("caches" in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith("turnisync-")).map(k=>caches.delete(k)));}
   }catch(err){console.warn("Aggiornamento cache:",err);}
-  const url=new URL(location.href);url.searchParams.set("refresh","0.5.2-"+Date.now().toString());location.replace(url.toString());
+  const url=new URL(location.href);url.searchParams.set("refresh","0.5.3-"+Date.now().toString());location.replace(url.toString());
 }
 $("refreshAppBtn")?.addEventListener("click",refreshApplication);
 $("installHelpBtn")?.addEventListener("click",()=>alert("Per installare TurniSync su iPhone: apri questa pagina in Safari, tocca Condividi e scegli “Aggiungi alla schermata Home”."));
 loadSettings();
 if("serviceWorker" in navigator && location.protocol.startsWith("http"))
-  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.2",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
+  window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./sw.js?v=0.5.3",{updateViaCache:"none"});await reg.update();}catch(err){console.warn("Service worker update:",err);}});
