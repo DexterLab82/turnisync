@@ -520,7 +520,7 @@ $("installHelpBtn")?.addEventListener("click",async()=>{
  const ua=navigator.userAgent||"",ios=/iPhone|iPad|iPod/i.test(ua)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
  const safari=/Safari/i.test(ua)&&!/CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/i.test(ua);
  if(ios){
-  const msg=safari?"1. Tocca Condividi (il quadrato con la freccia in basso o in alto).\\n2. Scorri e seleziona “Aggiungi alla schermata Home”.\\n3. Conferma con “Aggiungi”.\\n\\nL'icona TurniSync comparirà sulla Home.":"Apri il menu del browser e scegli “Apri in Safari”. Poi in Safari: Condividi → Aggiungi alla schermata Home → Aggiungi.";
+  const msg=safari?"1. Tocca Condividi (il quadrato con la freccia in basso o in alto).\n2. Scorri e seleziona “Aggiungi alla schermata Home”.\n3. Conferma con “Aggiungi”.\n\nL'icona TurniSync comparirà sulla Home.":"Apri il menu del browser e scegli “Apri in Safari”. Poi in Safari: Condividi → Aggiungi alla schermata Home → Aggiungi.";
   if($("installStatus"))$("installStatus").textContent=msg.replace(/\\n/g," ");
   alert("Installazione TurniSync su iPhone\\n\\n"+msg);
  }else if(deferredInstallPrompt){
