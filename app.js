@@ -1,7 +1,15 @@
 const $ = (id) => document.getElementById(id);
+const savedPreferredSelection = (() => {
+  try {
+    const value = JSON.parse(localStorage.getItem("ts_preferred_selection") || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+})();
+const legacyPreferred = localStorage.getItem("ts_preferred") || "";
 const state = {
   image: null, people: [], selected: new Set(), shifts: [], debugReport: null,
-  preferred: localStorage.getItem("ts_preferred") || "",
+  preferred: legacyPreferred,
+  preferredSelection: savedPreferredSelection.length ? savedPreferredSelection : (legacyPreferred ? [legacyPreferred] : []),
   settings: JSON.parse(localStorage.getItem("ts_settings") || "null") || {
     codes: {
       1: { name: "Mattina", start: "06:00", end: "14:00" },
@@ -62,7 +70,7 @@ async function analyze() {
     state.shifts = parsed.shifts;
     state.debugReport = buildDebugReport(result.data, parsed, prepared.width, prepared.height);
     renderDebug();
-    state.selected = new Set(state.people.filter(p => normalize(p) === normalize(state.preferred)));
+    state.selected = new Set(state.people.filter(p => state.preferredSelection.some(saved => normalize(p) === normalize(saved))));
     renderPeople(); renderShifts();
     $("homeMessage").textContent =
       `Tabella analizzata (${parsed.period}). ${parsed.people.length} persone, ${parsed.shifts.length} turni riconosciuti. ` +
@@ -100,7 +108,7 @@ function buildDebugReport(data,parsed,width,height){
   const words=(data.words||[]).map(w=>({text:w.text,confidence:Number((w.confidence||0).toFixed(1)),
     x0:w.bbox?.x0,y0:w.bbox?.y0,x1:w.bbox?.x1,y1:w.bbox?.y1}));
   const lines=(data.lines||[]).map((l,i)=>({line:i+1,text:l.text,confidence:Number((l.confidence||0).toFixed(1)),box:l.bbox}));
-  return {appVersion:"0.4.3",generatedAt:new Date().toISOString(),
+  return {appVersion:"0.4.4",generatedAt:new Date().toISOString(),
     image:{width,height,originalName:state.image?.name||"immagine"},
     ocr:{text:data.text||"",wordCount:words.length,lineCount:lines.length,words,lines},
     table:{period:parsed.period,people:parsed.people,shiftCount:parsed.shifts.length,
@@ -364,16 +372,41 @@ function renderPeople() {
   state.people.forEach(p => {
     const row=document.createElement("div"); row.className="person-row";
     const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=state.selected.has(p);
-    cb.onchange=()=>{cb.checked?state.selected.add(p):state.selected.delete(p);renderShifts();$("savePreferred").disabled=!state.selected.size;};
+    cb.onchange=()=>{
+      cb.checked?state.selected.add(p):state.selected.delete(p);
+      renderShifts();
+      $("savePreferred").disabled=!state.selected.size;
+      $("savePreferred").textContent="Salva selezione come preferita";
+      $("preferredFeedback").textContent="Selezione modificata: premi Salva per memorizzarla.";
+      $("preferredFeedback").classList.remove("hidden");
+    };
     const label=document.createElement("label"); label.textContent=p;
     const small=document.createElement("small"); small.textContent=state.shifts.filter(s=>normalize(s.person)===normalize(p)).length+" turni";
     row.append(cb,label,small); el.append(row);
   });
   $("savePreferred").disabled=!state.selected.size;
 }
+$("savePreferred").type="button";
 $("savePreferred").onclick=()=>{
-  const first=[...state.selected][0]||""; state.preferred=first; $("preferredName").value=first;
-  localStorage.setItem("ts_preferred",first); $("homeMessage").textContent=first?`Preferito salvato: ${first}`:"Preferenza rimossa.";
+  const selected=[...state.selected];
+  try {
+    state.preferredSelection=selected;
+    state.preferred=selected[0]||"";
+    localStorage.setItem("ts_preferred_selection",JSON.stringify(selected));
+    localStorage.setItem("ts_preferred",state.preferred);
+    $("preferredName").value=state.preferred;
+    $("preferredFeedback").textContent=selected.length
+      ? "Selezione preferita salvata su questo iPhone: "+selected.join(", ")
+      : "Preferiti rimossi.";
+    $("preferredFeedback").classList.remove("hidden");
+    $("savePreferred").textContent="Preferiti salvati ✓";
+    $("homeMessage").textContent=selected.length
+      ? "Preferiti salvati: "+selected.join(", ")
+      : "Preferiti rimossi.";
+  } catch(err) {
+    $("preferredFeedback").textContent="Impossibile salvare la preferenza nel browser: "+err.message;
+    $("preferredFeedback").classList.remove("hidden");
+  }
 };
 function renderShifts() {
   const list=$("shiftList"), chosen=state.shifts.filter(s=>state.selected.has(s.person));
@@ -431,9 +464,13 @@ function loadSettings(){
   for(let i=1;i<=3;i++){$("s"+i+"start").value=state.settings.codes[i].start;$("s"+i+"end").value=state.settings.codes[i].end;}
 }
 $("saveSettings").onclick=()=>{
-  state.preferred=$("preferredName").value.trim();state.settings.duplicates=$("duplicateCheck").checked;
+  state.preferred=$("preferredName").value.trim();
+  state.preferredSelection=state.preferred?[state.preferred]:[];
+  localStorage.setItem("ts_preferred",state.preferred);
+  localStorage.setItem("ts_preferred_selection",JSON.stringify(state.preferredSelection));
+  state.settings.duplicates=$("duplicateCheck").checked;
   for(let i=1;i<=3;i++){state.settings.codes[i].start=$("s"+i+"start").value;state.settings.codes[i].end=$("s"+i+"end").value;}
-  localStorage.setItem("ts_preferred",state.preferred);localStorage.setItem("ts_settings",JSON.stringify(state.settings));
+  localStorage.setItem("ts_settings",JSON.stringify(state.settings));
   $("homeMessage").textContent="Impostazioni salvate sul dispositivo.";
 };
 $("resetBtn").onclick=()=>{
